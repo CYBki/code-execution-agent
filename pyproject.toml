@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentic-analyze-d"
+version = "0.1.0"
+description = "Data analysis agent with Deep Agents + Daytona sandbox"
+requires-python = ">=3.12"
+dependencies = [
+    "deepagents",
+    "langchain-anthropic>=1.4.0",
+    "langchain-daytona",
+    "daytona",
+    "streamlit>=1.40.0",
+    "pandas",
+    "openpyxl",
+    "pdfplumber",
+    "duckdb>=1.1.0",
+    "python-dotenv",
+    "Pillow",
+    "pyyaml",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*", "skills*"]
