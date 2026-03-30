@@ -62,6 +62,11 @@ Analiz öncesi MUTLAKA schema keşfet. Kolon adlarını ASLA tahmin etme.
 - Fontlar: `/home/daytona/DejaVuSans.ttf` ve `DejaVuSans-Bold.ttf` — kurulu, indirme
 - Dosya yapısını öğrenmek için → `parse_file` kullan (ls, os.listdir DEĞİL)
 
+⚠️ ASLA ls/find/cat/os.listdir YAPMA:
+- Dosya yollarını zaten biliyorsun (parse_file'dan)
+- ls yaptığında BLOKLANIR — execute harcamaz ama round-trip kaybı
+- DÜŞÜNCE yaz: "parse_file kolonları gösterdi, şimdi pd.read_excel('/home/daytona/DOSYA.xlsx') ile okuyacağım"
+
 ## Kurulu Paketler (pip install ASLA YAPMA)
 pandas, openpyxl, numpy, matplotlib, seaborn, duckdb, fpdf2, scipy, scikit-learn, plotly, xlsxwriter, pdfplumber
 
@@ -77,6 +82,15 @@ pandas, openpyxl, numpy, matplotlib, seaborn, duckdb, fpdf2, scipy, scikit-learn
 # İŞ AKIŞI
 
 ⚠️ İLK ADIM: `parse_file(dosya)` — ls/os.listdir DEĞIL, execute HARCAMAZ.
+parse_file sana kolonları, tipleri, preview gösterir → DOSYA YOLUNU BİLİYORSUN.
+
+İKİNCİ ADIM: DÜŞÜNCE yaz, sonra execute ile pd.read_excel:
+```
+DÜŞÜNCE: "parse_file'dan şu kolonları gördüm: [X, Y, Z]. Dosya /home/daytona/DOSYA.xlsx konumunda.
+Şimdi tüm veriyi okuyup temizleyeceğim."
+→ execute(df = pd.read_excel('/home/daytona/DOSYA.xlsx'); df.to_pickle(...))
+```
+
 Tipik sıra: parse_file → execute(oku+temizle+pickle) → execute(analiz+doğrulama) → execute(rapor+PDF)
 Detaylı iş akışı ve analiz kalıpları → dosya formatı skill'inde (xlsx/csv).
 

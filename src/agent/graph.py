@@ -225,13 +225,19 @@ def build_agent(
                 detected = bare_cmd if bare_cmd in shell_cmds else "shell command"
                 logger.info("[Tool] BLOCKED shell cmd '%s' in execute", detected)
                 _execute_count -= 1
-                return ToolMessage(
-                    content=f"Shell command '{detected}' BLOKLANDΙ. "
-                            "Dosya /home/daytona/<dosyaadı> konumunda — parse_file zaten çalıştı, schema sende var. "
-                            "parse_file TEKRAR ÇAĞIRMA (zaten çalıştı). "
-                            "Doğrudan execute ile pd.read_excel/read_csv kullan.",
-                    tool_call_id=tool_call_id,
+                # Show real filenames from parse_file calls
+                file_list = "\n".join(f"  - /home/daytona/{fn}" for fn in _seen_parse_files) if _seen_parse_files else ""
+                instruction = (
+                    f"⛔ Shell command '{detected}' YASAK — ls/find/cat kullanma.\n\n"
+                    f"parse_file() zaten çalıştı, schema'yı gördün. Dosya(lar):\n{file_list or '  (parse_file henüz çağrılmadı)'}\n\n"
+                    "ŞİMDİ NE YAPMALISIN:\n"
+                    "1. ls/cat YAPMA — dosya zaten orada, schema'yı biliyorsun\n"
+                    "2. DÜŞÜNCE yaz: 'parse_file'dan gördüğüm kolonlar: [...]. Şimdi pd.read_excel ile okuyacağım.'\n"
+                    "3. execute() çağır:\n"
+                    "   df = pd.read_excel('/home/daytona/DOSYA_ADI_BURAYA.xlsx')\n"
+                    "   print(df.shape)  # doğrulama\n"
                 )
+                return ToolMessage(content=instruction, tool_call_id=tool_call_id)
 
             # Block Python filesystem exploration (os.listdir, glob, etc.)
             # NOTE: os.path.exists and os.path.getsize are ALLOWED (Rule 8: output verification)
@@ -239,13 +245,19 @@ def build_agent(
             if any(p in cmd for p in fs_patterns):
                 logger.info("[Tool] BLOCKED Python filesystem cmd in execute")
                 _execute_count -= 1
-                return ToolMessage(
-                    content="Filesystem exploration (os.listdir, glob, etc.) BLOKLANDΙ. "
-                            "Dosya /home/daytona/<dosyaadı> konumunda — parse_file zaten çalıştı, schema sende var. "
-                            "parse_file TEKRAR ÇAĞIRMA (zaten çalıştı). "
-                            "Doğrudan execute ile pd.read_excel/read_csv kullan.",
-                    tool_call_id=tool_call_id,
+                # Show real filenames from parse_file calls
+                file_list = "\n".join(f"  - /home/daytona/{fn}" for fn in _seen_parse_files) if _seen_parse_files else ""
+                instruction = (
+                    f"⛔ Filesystem exploration (os.listdir, glob, pathlib) YASAK.\n\n"
+                    f"parse_file() zaten çalıştı, schema'yı gördün. Dosya(lar):\n{file_list or '  (parse_file henüz çağrılmadı)'}\n\n"
+                    "ŞİMDİ NE YAPMALISIN:\n"
+                    "1. os.listdir/glob YAPMA — dosya yollarını biliyorsun\n"
+                    "2. DÜŞÜNCE yaz: 'parse_file'dan kolonları gördüm, şimdi pd.read_excel ile okuyacağım'\n"
+                    "3. execute() çağır:\n"
+                    "   df = pd.read_excel('/home/daytona/DOSYA_ADI.xlsx')\n"
+                    "   print(df.shape)  # doğrulama\n"
                 )
+                return ToolMessage(content=instruction, tool_call_id=tool_call_id)
 
             # Track schema discovery (first execute should discover columns)
             if _execute_count == 1:
