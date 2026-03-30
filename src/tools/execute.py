@@ -92,9 +92,32 @@ def make_execute_tool(backend: DaytonaSandbox):
             else:
                 shell_cmd = command
 
-            result = backend.execute(shell_cmd)
-            output = getattr(result, "output", str(result)) if result else ""
-            exit_code = getattr(result, "exit_code", None)
+            # Retry on connection errors (sandbox container IP resolution fails sometimes)
+            max_retries = 2
+            result = None
+            output = ""
+            exit_code = None
+
+            for attempt in range(max_retries + 1):
+                try:
+                    result = backend.execute(shell_cmd)
+                    output = getattr(result, "output", str(result)) if result else ""
+                    exit_code = getattr(result, "exit_code", None)
+                    if attempt > 0:
+                        logger.info("Sandbox connection recovered on attempt %d", attempt + 1)
+                    break  # Success
+                except RuntimeError as e:
+                    if "Failed to resolve container IP" in str(e) and attempt < max_retries:
+                        logger.warning("Sandbox connection error (attempt %d/%d): %s",
+                                      attempt + 1, max_retries + 1, e)
+                        import time
+                        time.sleep(1)  # Brief wait before retry
+                        continue
+                    # Last attempt or non-retryable error
+                    raise RuntimeError(
+                        f"⚠️ Sandbox bağlantı hatası - container IP çözümlenemedi. "
+                        f"Lütfen 'Yeni Konuşma' ile oturumu sıfırlayın. (Attempt {attempt + 1}/{max_retries + 1})"
+                    ) from e
 
             # Log output for debugging (truncated)
             out_preview = (output or "")[:300].replace("\n", "\\n")
