@@ -93,6 +93,12 @@ pandas, openpyxl, numpy, matplotlib, seaborn, duckdb, fpdf2, scipy, scikit-learn
 - HEMEN kullanıcıya bildir: "⚠️ Sandbox hazırlığı tamamlanamadı (openpyxl yüklenemedi). Lütfen 'Yeni Konuşma' ile oturumu sıfırlayın ve tekrar deneyin."
 - Başka bir execute YAPMA, DUR
 
+⚠️ EĞER ModuleNotFoundError: pptx (python-pptx) ALIRSAN:
+- Bu eski sandbox'tan kaynaklanıyor (python-pptx sonradan eklendi)
+- FALLBACK: HTML dashboard kullan (generate_html)
+- Kullanıcıya bildir: "⚠️ Sandbox paket yüklemesi tamamlanmadı (python-pptx modülü eksik). İstediğiniz PowerPoint formatı yerine interaktif HTML dashboard hazırladım. PPTX için lütfen 'Yeni Konuşma' ile oturumu sıfırlayın."
+- generate_html ile Chart.js grafikleri oluştur
+
 ## BLOKLANIR (denersen execute hakkın yanmaz ama round-trip boşa gider):
 `ls`, `find`, `cat`, `os.listdir`, `glob`, `pathlib`, `subprocess`, `pip install`, `urllib`, `requests`, `wget`
 

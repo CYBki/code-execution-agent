@@ -164,11 +164,11 @@ class SandboxManager:
                 "xlsxwriter": "xlsxwriter", "numpy": "numpy",
                 "matplotlib": "matplotlib", "seaborn": "seaborn",
                 "plotly": "plotly", "scipy": "scipy", "scikit-learn": "sklearn",
+                "python-pptx": "pptx",  # PowerPoint generation (moved to critical)
             }
             optional_pkgs = {
                 "pdfplumber": "pdfplumber",
                 "duckdb": "duckdb",
-                "python-pptx": "pptx",  # PowerPoint generation
             }
             all_pkgs = {**critical_pkgs, **optional_pkgs}
 
@@ -238,7 +238,7 @@ class SandboxManager:
 
             # Phase 3: Verify critical packages
             verify = be.execute(
-                "python3 -c 'import weasyprint, pandas, openpyxl; print(\"VERIFY_OK\")' 2>&1"
+                "python3 -c 'import weasyprint, pandas, openpyxl, pptx; print(\"VERIFY_OK\")' 2>&1"
             )
             v_out = getattr(verify, 'output', '') or ''
             if "VERIFY_OK" in v_out:
