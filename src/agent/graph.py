@@ -109,6 +109,8 @@ def build_agent(
     _last_execute_failed = False  # Track if previous execute had error/assertion
     _correction_count = 0  # Track correction loop iterations (max 2)
     _MAX_CORRECTIONS = 2
+    _consecutive_blocks = 0  # Track consecutive blocks without execute
+    _MAX_CONSECUTIVE_BLOCKS = 2  # Circuit breaker: stop after 2 consecutive blocks
 
     def reset_interceptor_state():
         """Reset all interceptor counters for a new conversation turn.
@@ -117,24 +119,40 @@ def build_agent(
         between user messages (closure variables persist in cached agent).
         """
         nonlocal _execute_count, _schema_discovered, _total_blocked
-        nonlocal _last_execute_failed, _correction_count
+        nonlocal _last_execute_failed, _correction_count, _consecutive_blocks
         _execute_count = 0
         _schema_discovered = False
         _total_blocked = 0
         _last_execute_failed = False
         _correction_count = 0
+        _consecutive_blocks = 0
         _seen_parse_files.clear()
         logger.info("[Interceptor] State reset for new turn")
 
     @wrap_tool_call
     def smart_interceptor(request, handler):
         nonlocal _execute_count, _schema_discovered, _total_blocked
-        nonlocal _last_execute_failed, _correction_count
+        nonlocal _last_execute_failed, _correction_count, _consecutive_blocks
         tc = request.tool_call
         name = tc["name"]
         args = tc.get("args", {})
         tool_call_id = tc.get("id", "")
         _phase = "-"  # Set per-execute below
+
+        # Circuit breaker: too many consecutive blocks = infinite loop
+        if _consecutive_blocks >= _MAX_CONSECUTIVE_BLOCKS:
+            logger.error("[Tool] CIRCUIT BREAKER triggered (%d consecutive blocks)", _consecutive_blocks)
+            return ToolMessage(
+                content=(
+                    f"🛑 CIRCUIT BREAKER: {_consecutive_blocks} ardışık blok (parse_file/ls tekrarı).\n\n"
+                    "Sonsuz döngüye girdin. HEMEN DUR.\n\n"
+                    "Kullanıcıya DÜRÜST OL:\n"
+                    "\"⚠️ Teknik sorun: Tool çağrılarında döngü oluştu. "
+                    "Lütfen 'Yeni Konuşma' ile oturumu sıfırlayın.\"\n\n"
+                    "BAŞKA TOOL ÇAĞIRMA. Sadece mesaj yaz ve DUR."
+                ),
+                tool_call_id=tool_call_id,
+            )
 
         # Block duplicate parse_file
         if name == "parse_file":
@@ -145,16 +163,17 @@ def build_agent(
             if filename_normalized in _seen_parse_files:
                 logger.info("[Tool] BLOCKED duplicate parse_file(%s)", filename)
                 _total_blocked += 1
+                _consecutive_blocks += 1
                 return ToolMessage(
                     content=(
-                        f"⛔ BLOKLANDΙ: '{filename}' zaten parse edildi (#{_total_blocked}. blok)\n\n"
+                        f"⛔ BLOKLANDΙ: '{filename}' zaten parse edildi (#{_total_blocked}. blok, ardışık #{_consecutive_blocks})\n\n"
                         "parse_file ASLA TEKRAR ÇAĞIRMA — schema zaten sende var.\n"
                         "ls/cat/os.listdir de YAPMA — dosya yolunu biliyorsun.\n\n"
                         "BU ADIMI ATLA, DOĞRUDAN ŞU EXECUTE'U ÇALIŞTIR:\n"
                         f"df = pd.read_excel('/home/daytona/{filename_normalized}')\n"
                         f"df.to_pickle('/home/daytona/data.pkl')\n"
                         f"print(f'✅ {{df.shape[0]}} satır, {{df.shape[1]}} kolon yüklendi')\n\n"
-                        "parse_file TEKRAR çağırırsan sonsuz döngüye girersin!"
+                        "Başka tool ÇAĞIRMA (parse_file/ls) — EXECUTE yap!"
                     ),
                     tool_call_id=tool_call_id,
                 )
@@ -230,16 +249,17 @@ def build_agent(
                 detected = bare_cmd if bare_cmd in shell_cmds else "shell command"
                 logger.info("[Tool] BLOCKED shell cmd '%s' in execute", detected)
                 _execute_count -= 1
+                _consecutive_blocks += 1
                 # Show real filenames from parse_file calls
                 file_list = "\n".join(f"  - /home/daytona/{fn}" for fn in _seen_parse_files) if _seen_parse_files else ""
                 instruction = (
-                    f"⛔ Shell command '{detected}' YASAK — ls/find/cat kullanma.\n\n"
+                    f"⛔ Shell command '{detected}' YASAK (ardışık blok #{_consecutive_blocks})\n\n"
                     f"parse_file() zaten çalıştı, schema'yı gördün. Dosya(lar):\n{file_list or '  (parse_file henüz çağrılmadı)'}\n\n"
                     "ŞİMDİ NE YAPMALISIN:\n"
-                    "1. ls/cat YAPMA — dosya zaten orada, schema'yı biliyorsun\n"
+                    "1. ls/cat/parse_file YAPMA — dosya zaten orada, schema'yı biliyorsun\n"
                     "2. DÜŞÜNCE yaz: 'parse_file'dan gördüğüm kolonlar: [...]. Şimdi pd.read_excel ile okuyacağım.'\n"
-                    "3. execute() çağır:\n"
-                    "   df = pd.read_excel('/home/daytona/DOSYA_ADI_BURAYA.xlsx')\n"
+                    "3. execute() çağır (ls/cat DEĞİL, pd.read_excel):\n"
+                    "   df = pd.read_excel('/home/daytona/DOSYA_ADI.xlsx')\n"
                     "   print(df.shape)  # doğrulama\n"
                 )
                 return ToolMessage(content=instruction, tool_call_id=tool_call_id)
@@ -250,15 +270,16 @@ def build_agent(
             if any(p in cmd for p in fs_patterns):
                 logger.info("[Tool] BLOCKED Python filesystem cmd in execute")
                 _execute_count -= 1
+                _consecutive_blocks += 1
                 # Show real filenames from parse_file calls
                 file_list = "\n".join(f"  - /home/daytona/{fn}" for fn in _seen_parse_files) if _seen_parse_files else ""
                 instruction = (
-                    f"⛔ Filesystem exploration (os.listdir, glob, pathlib) YASAK.\n\n"
+                    f"⛔ Filesystem exploration YASAK (ardışık blok #{_consecutive_blocks})\n\n"
                     f"parse_file() zaten çalıştı, schema'yı gördün. Dosya(lar):\n{file_list or '  (parse_file henüz çağrılmadı)'}\n\n"
                     "ŞİMDİ NE YAPMALISIN:\n"
-                    "1. os.listdir/glob YAPMA — dosya yollarını biliyorsun\n"
+                    "1. os.listdir/glob/parse_file YAPMA — dosya yollarını biliyorsun\n"
                     "2. DÜŞÜNCE yaz: 'parse_file'dan kolonları gördüm, şimdi pd.read_excel ile okuyacağım'\n"
-                    "3. execute() çağır:\n"
+                    "3. execute() çağır (os.listdir DEĞİL, pd.read_excel):\n"
                     "   df = pd.read_excel('/home/daytona/DOSYA_ADI.xlsx')\n"
                     "   print(df.shape)  # doğrulama\n"
                 )
@@ -447,6 +468,13 @@ def build_agent(
                     {k: str(v)[:80] for k, v in args.items()},
                     _phase if name == "execute" else "-")
         result = handler(request)
+
+        # Reset consecutive blocks on successful execute
+        if name == "execute" and isinstance(result, ToolMessage):
+            # If execute actually ran (not blocked), reset counter
+            if "⛔" not in (result.content or ""):
+                _consecutive_blocks = 0
+                logger.info("[Tool] execute succeeded, reset consecutive_blocks")
 
         # Append remaining execute count + correction loop info
         if name == "execute" and isinstance(result, ToolMessage):
