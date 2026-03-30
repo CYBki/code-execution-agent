@@ -61,7 +61,7 @@ def make_execute_tool(backend: DaytonaSandbox):
         Use this to run Python scripts for data analysis, PDF generation, etc.
         The sandbox has pre-installed packages: pandas, openpyxl, numpy,
         matplotlib, seaborn, pdfplumber, duckdb, fpdf2, scipy, scikit-learn,
-        plotly, xlsxwriter.
+        plotly, xlsxwriter, python-pptx, weasyprint.
 
         Example:
             execute("python3 -c 'import pandas as pd; print(pd.__version__)'")

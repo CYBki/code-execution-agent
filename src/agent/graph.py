@@ -189,7 +189,7 @@ def build_agent(
                 return ToolMessage(
                     content="⛔ pip install YASAK. Tüm paketler sandbox'ta PRE-INSTALLED:\n"
                             "pandas, openpyxl, numpy, matplotlib, seaborn, plotly, duckdb, fpdf2, "
-                            "scipy, scikit-learn, xlsxwriter, pdfplumber, weasyprint.\n\n"
+                            "scipy, scikit-learn, xlsxwriter, pdfplumber, weasyprint, python-pptx.\n\n"
                             "EĞER 'ModuleNotFoundError: openpyxl' ALIRSAN:\n"
                             "→ Sandbox paketleri henüz yüklenirken sorun oldu.\n"
                             "→ Kullanıcıya DÜRÜST ol: 'Sandbox hazırlığı tamamlanamadı. Lütfen oturumu sıfırlayın.'\n"

@@ -168,6 +168,7 @@ class SandboxManager:
             optional_pkgs = {
                 "pdfplumber": "pdfplumber",
                 "duckdb": "duckdb",
+                "python-pptx": "pptx",  # PowerPoint generation
             }
             all_pkgs = {**critical_pkgs, **optional_pkgs}
 
