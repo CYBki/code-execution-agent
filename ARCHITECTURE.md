@@ -51,7 +51,8 @@
 │  ┌────────────────────────────────────────────────────────────────────┐  │
 │  │  graph.py — build_agent() / get_or_build_agent() [session cache]   │  │
 │  │                                                                    │  │
-│  │  Claude Sonnet 4 ◄── Turkish System Prompt (prompts.py)            │  │
+│  │  Claude Sonnet 4 ◄── English System Prompt (prompts.py)            │  │
+│  │       │               (user responses in Turkish)                  │  │
 │  │       │               + uploaded file paths                        │  │
 │  │       │               + progressive skill content                  │  │
 │  │       │                                                            │  │
@@ -63,6 +64,13 @@
 │  │       ├──▶ Tool: generate_html          (custom, BROWSER iframe)   │  │
 │  │       ├──▶ Tool: create_visualization   (custom, DAYTONA PNG)      │  │
 │  │       └──▶ Tool: download_file          (custom, DAYTONA → browser)│  │
+│  │                                                                    │  │
+│  │       Output formats (single or multi-format):                     │  │
+│  │       • PDF: weasyprint (HTML→PDF, Turkish chars)                  │  │
+│  │       • PPTX: python-pptx + matplotlib charts (downloadable)       │  │
+│  │       • HTML: Chart.js interactive dashboard (browser iframe)      │  │
+│  │       • Excel: openpyxl/xlsxwriter (editable data)                 │  │
+│  │       User can request: single format OR multi-format combo        │  │
 │  │                                                                    │  │
 │  │  ┌─── BLOCKED by smart_interceptor (returns ToolMessage) ───────┐  │  │
 │  │  │  ls, find, cat, head, tail (shell cmds in execute)           │  │  │
@@ -83,8 +91,11 @@
 │  │       • BLOCKS: nrows>10 in read_excel/read_csv (sampling)        │  │
 │  │       • BLOCKS: nrows≤10 schema re-check after parse_file ran     │  │
 │  │         → redirects agent to CSV conversion immediately            │  │
-│  │       • BLOCKS: duplicate parse_file → gives CSV conversion code  │  │
+│  │       • BLOCKS: duplicate parse_file (path normalized) → CSV code │  │
+│  │         (strips /home/daytona/ prefix for duplicate detection)    │  │
 │  │       • BLOCKS: execute > 6 simple / 10 complex (dynamic limit)   │  │
+│  │       • CIRCUIT BREAKER: stops after 2 consecutive blocks to      │  │
+│  │         prevent infinite loops (parse_file→ls→parse_file→...)     │  │
 │  │       • AUTO-FIX: Arial/Helvetica → DejaVu fonts in PDF code      │  │
 │  │       • AUTO-FIX: Injects add_font() if missing in FPDF code      │  │
 │  │       • LOGS: all tool calls with truncated args                   │  │
@@ -263,9 +274,13 @@
      │ pip install │  │    reached"     │  │                  │
      │ network req │  │                 │  │ FPDF + no        │
      │ nrows>10    │  │ dup parse_file  │  │ add_font()       │
-     │ nrows≤10    │  │ → CSV conv      │  │ → inject         │
-     │ after parse │  │   instructions  │  │   add_font()     │
-     │             │  │                 │  │                  │
+     │ nrows≤10    │  │ (path norm'd)   │  │ → inject         │
+     │ after parse │  │ → CSV conv      │  │   add_font()     │
+     │             │  │   instructions  │  │                  │
+     │ Circuit     │  │                 │  │                  │
+     │ breaker:    │  │ 2+ consecutive  │  │                  │
+     │ 2 consec.   │  │ blocks → STOP   │  │                  │
+     │ blocks      │  │ → force error   │  │                  │
      └──────┬──────┘  └────────┬────────┘  └────────┬─────────┘
             │                  │                     │
             ▼                  ▼                     ▼
@@ -296,10 +311,14 @@
 │        │   └─ self._backend = DaytonaSandbox(timeout=180)        │
 │        │                                                         │
 │        └─ _install_packages (daemon thread):                     │
-│           ├─ Phase 1: DejaVuSans fonts via cp (~1s)              │
-│           ├─ Phase 2: all 12 packages via pip (~30s)             │
-│           ├─ Phase 3: verify critical imports                    │
-│           └─ _packages_ready.set() [always, via finally]         │
+│           ├─ Phase 1: DejaVuSans fonts + system deps (~3s)       │
+│           ├─ Phase 2: check installed packages, pip missing only │
+│           │   • Critical (blocks ready): weasyprint, pandas,     │
+│           │     openpyxl, xlsxwriter, numpy, matplotlib,         │
+│           │     seaborn, plotly, scipy, scikit-learn, python-pptx│
+│           │   • Optional (background): pdfplumber, duckdb        │
+│           ├─ Phase 3: verify critical imports (must succeed)     │
+│           └─ _packages_ready.set() [only if verification OK]     │
 │                                                                  │
 │  atexit.register(mgr.stop) — cleanup on process exit             │
 │  Daytona auto_delete_interval=3600 — orphan TTL cleanup          │
@@ -429,7 +448,7 @@ app.py
       │
       ├── src/agent/graph.py         build_agent + get_or_build_agent (cached by fingerprint)
       │    ├── langchain.agents          create_agent + manual middleware stack
-      │    ├── src/agent/prompts.py      BASE_SYSTEM_PROMPT (Turkish, strict workflow)
+      │    ├── src/agent/prompts.py      BASE_SYSTEM_PROMPT (English, user responses Turkish)
       │    ├── src/skills/registry.py    detect_required_skills + detect_reference_files
       │    ├── src/skills/loader.py      load_skill + load_reference + compose_system_prompt
       │    └── langchain-anthropic       Claude Sonnet 4 (claude-sonnet-4-20250514)
