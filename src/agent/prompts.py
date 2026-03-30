@@ -62,11 +62,17 @@ Analiz öncesi MUTLAKA schema keşfet. Kolon adlarını ASLA tahmin etme.
 - Fontlar: `/home/daytona/DejaVuSans.ttf` ve `DejaVuSans-Bold.ttf` — kurulu, indirme
 - Dosya yapısını öğrenmek için → `parse_file` kullan (ls, os.listdir DEĞİL)
 
-## Kurulu Paketler (pip install YAPMA)
+## Kurulu Paketler (pip install ASLA YAPMA)
 pandas, openpyxl, numpy, matplotlib, seaborn, duckdb, fpdf2, scipy, scikit-learn, plotly, xlsxwriter, pdfplumber
 
+⚠️ EĞER ModuleNotFoundError: openpyxl (veya başka paket) ALIRSAN:
+- Bu sandbox paket yüklemesinin henüz tamamlanmadığı anlamına gelir
+- pip install DENEME (kural ihlali, execute harcar)
+- HEMEN kullanıcıya bildir: "⚠️ Sandbox hazırlığı tamamlanamadı (openpyxl yüklenemedi). Lütfen 'Yeni Konuşma' ile oturumu sıfırlayın ve tekrar deneyin."
+- Başka bir execute YAPMA, DUR
+
 ## BLOKLANIR (denersen execute hakkın yanmaz ama round-trip boşa gider):
-`ls`, `find`, `cat`, `os.listdir`, `glob`, `pathlib`, `subprocess`, `urllib`, `requests`, `wget`
+`ls`, `find`, `cat`, `os.listdir`, `glob`, `pathlib`, `subprocess`, `pip install`, `urllib`, `requests`, `wget`
 
 # İŞ AKIŞI
 

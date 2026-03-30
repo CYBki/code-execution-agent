@@ -180,11 +180,20 @@ def build_agent(
             cmd = args.get("command", "")
 
             # Block pip install (direct or via subprocess)
-            if "pip install" in cmd or "subprocess" in cmd:
+            # Catches: pip install, subprocess.run/call/Popen, sys.executable pip
+            pip_patterns = ["pip install", "pip3 install", "subprocess.run", "subprocess.call",
+                           "subprocess.check_call", "subprocess.Popen", "sys.executable, '-m', 'pip'"]
+            if any(p in cmd for p in pip_patterns):
                 logger.info("[Tool] BLOCKED pip/subprocess in execute")
                 _execute_count -= 1  # Don't count blocked calls
                 return ToolMessage(
-                    content="All packages are pre-installed (pandas, openpyxl, fpdf2, matplotlib, seaborn, plotly, duckdb, pdfplumber, scipy, scikit-learn, xlsxwriter, numpy). No pip install or subprocess needed.",
+                    content="⛔ pip install YASAK. Tüm paketler sandbox'ta PRE-INSTALLED:\n"
+                            "pandas, openpyxl, numpy, matplotlib, seaborn, plotly, duckdb, fpdf2, "
+                            "scipy, scikit-learn, xlsxwriter, pdfplumber, weasyprint.\n\n"
+                            "EĞER 'ModuleNotFoundError: openpyxl' ALIRSAN:\n"
+                            "→ Sandbox paketleri henüz yüklenirken sorun oldu.\n"
+                            "→ Kullanıcıya DÜRÜST ol: 'Sandbox hazırlığı tamamlanamadı. Lütfen oturumu sıfırlayın.'\n"
+                            "→ pip install DENEME — bu kural ihlalidir ve execute hakkını harcarsın.",
                     tool_call_id=tool_call_id,
                 )
 

@@ -242,14 +242,16 @@ class SandboxManager:
             v_out = getattr(verify, 'output', '') or ''
             if "VERIFY_OK" in v_out:
                 logger.info("Critical packages verified OK")
+                self._packages_ready.set()
+                logger.info("_packages_ready event SET (verified)")
             else:
-                logger.warning("Package verification failed: %s", v_out[:200])
+                logger.error("Package verification FAILED: %s", v_out[:200])
+                # Don't set ready flag if verification fails
+                # Agent will get timeout warning from wait_until_ready()
 
         except Exception as e:
             logger.error("Package installation FAILED: %s", e, exc_info=True)
-        finally:
-            self._packages_ready.set()
-            logger.info("_packages_ready event SET")
+            # Don't set ready flag on exception — let wait_until_ready() timeout
 
     def wait_until_ready(self, timeout: float = 360) -> bool:
         """Block until packages are installed. Returns False on timeout."""
