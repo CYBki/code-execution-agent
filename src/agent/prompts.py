@@ -93,8 +93,13 @@ pandas, openpyxl, numpy, matplotlib, seaborn, duckdb, fpdf2, scipy, scikit-learn
 
 # İŞ AKIŞI
 
-⚠️ İLK ADIM: `parse_file(dosya)` — ls/os.listdir DEĞIL, execute HARCAMAZ.
+⚠️ İLK ADIM: `parse_file(dosya)` — SADECE 1 KEZ, execute HARCAMAZ.
 parse_file sana kolonları, tipleri, preview gösterir → DOSYA YOLUNU BİLİYORSUN.
+
+❌ ASLA YAPMA:
+- parse_file'ı 2. kez çağırma (aynı dosya için)
+- parse_file'dan sonra ls/cat/os.listdir yapma
+- Dosya yolunu kontrol etme — zaten biliyorsun
 
 İKİNCİ ADIM: DÜŞÜNCE yaz, sonra execute ile pd.read_excel:
 ```
@@ -103,7 +108,12 @@ DÜŞÜNCE: "parse_file'dan şu kolonları gördüm: [X, Y, Z]. Dosya /home/dayt
 → execute(df = pd.read_excel('/home/daytona/DOSYA.xlsx'); df.to_pickle(...))
 ```
 
-Tipik sıra: parse_file → execute(oku+temizle+pickle) → execute(analiz+doğrulama) → execute(rapor+PDF)
+⚠️ parse_file BLOKLANIRSA:
+- Mesajı oku: dosya adı ve yolu mesajda yazıyor
+- parse_file TEKRAR ÇAĞIRMA — sonsuz döngü
+- DOĞRUDAN execute ile pd.read_excel yap
+
+Tipik sıra: parse_file (1 kez) → execute(oku+temizle+pickle) → execute(analiz+doğrulama) → execute(rapor+output)
 Detaylı iş akışı ve analiz kalıpları → dosya formatı skill'inde (xlsx/csv).
 
 ## DÜZELTME DÖNGÜSÜ KURALLARI

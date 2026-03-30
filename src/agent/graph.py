@@ -139,21 +139,26 @@ def build_agent(
         # Block duplicate parse_file
         if name == "parse_file":
             filename = args.get("filename", "")
-            if filename in _seen_parse_files:
+            # Normalize path: remove /home/daytona/ prefix if present
+            filename_normalized = filename.replace("/home/daytona/", "").strip("/")
+
+            if filename_normalized in _seen_parse_files:
                 logger.info("[Tool] BLOCKED duplicate parse_file(%s)", filename)
+                _total_blocked += 1
                 return ToolMessage(
                     content=(
-                        f"'{filename}' zaten parse edildi — schema sende var. "
-                        "Şimdi DOĞRUDAN şunu yap:\n"
-                        f"xls = pd.ExcelFile('/home/daytona/{filename}')\n"
-                        "for sheet in xls.sheet_names:\n"
-                        "    df = pd.read_excel('/home/daytona/{filename}', sheet_name=sheet)\n"
-                        "    df.to_csv(f'/home/daytona/temp_{{sheet}}.csv', index=False); del df\n"
-                        "Ardından DuckDB ile tüm analizleri ve PDF'i TEK execute'da tamamla."
+                        f"⛔ BLOKLANDΙ: '{filename}' zaten parse edildi (#{_total_blocked}. blok)\n\n"
+                        "parse_file ASLA TEKRAR ÇAĞIRMA — schema zaten sende var.\n"
+                        "ls/cat/os.listdir de YAPMA — dosya yolunu biliyorsun.\n\n"
+                        "BU ADIMI ATLA, DOĞRUDAN ŞU EXECUTE'U ÇALIŞTIR:\n"
+                        f"df = pd.read_excel('/home/daytona/{filename_normalized}')\n"
+                        f"df.to_pickle('/home/daytona/data.pkl')\n"
+                        f"print(f'✅ {{df.shape[0]}} satır, {{df.shape[1]}} kolon yüklendi')\n\n"
+                        "parse_file TEKRAR çağırırsan sonsuz döngüye girersin!"
                     ),
                     tool_call_id=tool_call_id,
                 )
-            _seen_parse_files.add(filename)
+            _seen_parse_files.add(filename_normalized)
 
         # Rate-limit + guard execute
         if name == "execute":
