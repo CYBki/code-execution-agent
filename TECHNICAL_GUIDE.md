@@ -301,8 +301,13 @@ os.remove(html_path)  # Temp temizle
 | Ağ isteği | `urllib`, `requests`, `wget`, `curl` | Sandbox dışarıya çıkamaz |
 | nrows > 10 | `nrows=100`, `nrows=1000` | Tüm veri okunmalı |
 | Schema re-check | `nrows=5`, `nrows=10` + parse_file çalıştıysa | Schema zaten var |
-| Duplicate parse_file | Aynı dosya ikinci kez | Gereksiz |
+| Duplicate parse_file | Aynı dosya ikinci kez (path normalized) | Gereksiz |
 | Execute limiti | 6. veya 10. execute'dan sonra | Bütçe aşıldı |
+| **Circuit breaker** | **2 ardışık blok** | **Sonsuz döngü önleme** |
+
+**Path Normalization:** Duplicate parse_file tespitinde `/home/daytona/file.xlsx` ve `file.xlsx` aynı kabul edilir (prefix strip).
+
+**Circuit Breaker:** Agent 2 kez üst üste bloklanırsa (örn: parse_file→ls→parse_file) üçüncü tool çağrısı STOP mesajı döner, zorunlu hata.
 
 ### Auto-Fix Kuralları (execute değiştirilir, çalışır)
 
@@ -394,6 +399,20 @@ csv_paths = {
     'Sheet2': '/home/daytona/temp_sheet2.csv',
 }
 ```
+
+### Hata: Failed to resolve container IP
+
+**Sebep:** Daytona sandbox container'ı geçici olarak network'ten düştü (DNS resolution hatası).
+
+**Çözüm:** `execute.py` otomatik retry yapar (max 3 deneme, 1s delay). Eğer 3 denemede de başarısız olursa:
+
+```python
+# Kullanıcıya gösterilen mesaj:
+"⚠️ Sandbox bağlantı hatası - container IP çözümlenemedi.
+Lütfen 'Yeni Konuşma' ile oturumu sıfırlayın."
+```
+
+**Kod:** [src/tools/execute.py](src/tools/execute.py) lines 96-120 - Connection retry logic with exponential backoff.
 
 ### Hata: 40MB dosya hâlâ pandas ile okunuyor
 
