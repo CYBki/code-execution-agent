@@ -156,6 +156,20 @@ def make_parse_file_tool():
             result = parser(data, filename)
             size_mb = len(data) / (1024 * 1024)
             output = str(result)
+
+            # Add explicit next-step instruction to prevent ls/parse_file loops
+            output += f"\n\n{'='*70}\n"
+            output += "✅ PARSE BAŞARILI. SONRAKI ADIM:\n\n"
+            output += "❌ YAPMA: ls, cat, os.listdir, parse_file tekrar çağırma\n"
+            output += "✅ YAP:\n"
+            output += f"1. DÜŞÜNCE yaz: 'Schema alındı. Dosya /home/daytona/{filename}. Şimdi pd.read_excel ile okuyup pickle'a kaydedeceğim.'\n"
+            output += "2. execute() çağır:\n"
+            output += f"   df = pd.read_excel('/home/daytona/{filename}')\n"
+            output += "   df.to_pickle('/home/daytona/data.pkl')\n"
+            output += "   print(f'✅ {{len(df)}} satır yüklendi')\n"
+            output += f"\n⚠️ SONRAKİ TOOL: execute (BAŞKA HİÇBİR TOOL ÇAĞIRMA!)\n"
+            output += "{'='*70}"
+
             if size_mb >= 40:
                 output += (
                     f"\n\n⚠️ BÜYÜK DOSYA ({size_mb:.1f} MB ≥ 40MB) — DUCKDB STRATEJİSİ ZORUNLU. "
@@ -164,13 +178,6 @@ def make_parse_file_tool():
                     "① df = pd.read_excel(path) ile CSV'ye çevir: df.to_csv('/home/daytona/temp.csv', index=False); del df "
                     "② duckdb.sql(\"SELECT ... FROM read_csv_auto('/home/daytona/temp.csv')\").df() "
                     "Threshold: file_size_mb >= 40 → DuckDB, < 40 → pandas."
-                )
-            if ext not in (".pdf",):
-                output += (
-                    f"\n\n✅ Dosya /home/daytona/{filename} konumunda mevcut ve okunmaya hazır. "
-                    "ls, find, os.path.exists, os.listdir GEREKMEZ — path zaten doğrulandı. "
-                    "Schema (kolonlar, tipler, preview) YUKARIDA verildi — execute ile nrows=5 veya head() tekrar YAPMA. "
-                    "Doğrudan bir sonraki adıma geç (temizle+pickle veya CSV dönüşümü)."
                 )
             return output
         except Exception as e:
