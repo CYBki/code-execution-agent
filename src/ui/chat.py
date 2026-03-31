@@ -165,11 +165,27 @@ def _process_stream_chunk(chunk, rendered_ids: set):
             elif msg_type == "tool":
                 tool_name = getattr(msg, "name", "")
                 tool_content = getattr(msg, "content", "") or ""
+
                 # Show blocked tool calls as warnings in the UI
                 _blocked_markers = ("⛔", "BLOCKED", "already parsed", "not needed",
                                     "Execute limit reached", "Shell command")
                 if any(m in tool_content for m in _blocked_markers):
                     st.warning(f"🚫 Bloklandı: {tool_content[:200]}")
+                    continue
+
+                # Show successful execute output (for debugging/verification)
+                if tool_name == "execute" and tool_content:
+                    with st.expander("📤 Execute Output", expanded=False):
+                        if "error" in tool_content.lower() or "traceback" in tool_content.lower():
+                            st.error(tool_content[:2000])
+                        else:
+                            st.text(tool_content[:2000])
+
+                # parse_file output (schema info)
+                elif tool_name == "parse_file" and tool_content:
+                    with st.expander("📋 Schema Info", expanded=False):
+                        st.text(tool_content[:2000])
+
                 # Artifacts are collected and rendered after stream completes
 
 
