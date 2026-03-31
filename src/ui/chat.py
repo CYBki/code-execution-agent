@@ -115,8 +115,13 @@ def _render_artifacts(html_list, charts_list, downloads_list, key_prefix=""):
             )
 
 
-def _process_stream_chunk(chunk):
-    """Process a single stream chunk and render appropriate UI elements."""
+def _process_stream_chunk(chunk, rendered_ids: set):
+    """Process a single stream chunk and render appropriate UI elements.
+
+    Args:
+        chunk: Stream chunk from LangGraph
+        rendered_ids: Set of message IDs already rendered (prevents history replay)
+    """
     if not isinstance(chunk, dict):
         return
     for node_name, node_output in chunk.items():
@@ -125,6 +130,13 @@ def _process_stream_chunk(chunk):
 
         messages = _safe_extract_messages(node_output)
         for msg in messages:
+            # Dedup: Skip messages already rendered (prevents old turns from replaying)
+            msg_id = getattr(msg, "id", None)
+            if msg_id and msg_id in rendered_ids:
+                continue
+            if msg_id:
+                rendered_ids.add(msg_id)
+
             msg_type = getattr(msg, "type", None)
 
             # AI message — stream text content
@@ -249,6 +261,7 @@ def render_chat():
     with st.chat_message("assistant"):
         full_response = ""
         collected_steps = []  # Persist tool call steps for history
+        rendered_ids = set()  # Track rendered message IDs (dedup)
 
         try:
             for chunk in agent.stream(
@@ -256,7 +269,7 @@ def render_chat():
                 config={"configurable": {"thread_id": session_id}},
                 stream_mode="updates",
             ):
-                _process_stream_chunk(chunk)
+                _process_stream_chunk(chunk, rendered_ids)
 
                 # Collect tool calls + text for message history
                 if not isinstance(chunk, dict):
