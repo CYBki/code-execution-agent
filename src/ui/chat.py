@@ -66,12 +66,33 @@ def _render_tool_call(tool_name: str, tool_input: dict, tool_output: str | None 
             if tool_input:
                 st.json(tool_input)
 
-        # Show tool output
+        # Show tool output (with expander for execute/parse_file)
         if tool_output:
-            if "error" in str(tool_output).lower():
-                st.error(str(tool_output)[:1000])
+            # Skip blocked messages (they're shown as warnings in stream)
+            _blocked_markers = ("⛔", "BLOCKED", "already parsed", "not needed",
+                                "Execute limit reached", "Shell command")
+            if any(m in tool_output for m in _blocked_markers):
+                return  # Don't show blocked output in history
+
+            # Show execute output in expander
+            if tool_name == "execute":
+                with st.expander("📤 Execute Output", expanded=False):
+                    if "error" in tool_output.lower() or "traceback" in tool_output.lower():
+                        st.error(tool_output[:2000])
+                    else:
+                        st.text(tool_output[:2000])
+
+            # Show parse_file output in expander
+            elif tool_name == "parse_file":
+                with st.expander("📋 Schema Info", expanded=False):
+                    st.text(tool_output[:2000])
+
+            # Other tool outputs (fallback)
             else:
-                st.text(str(tool_output)[:2000])
+                if "error" in tool_output.lower():
+                    st.error(tool_output[:1000])
+                else:
+                    st.text(tool_output[:2000])
 
 
 def _get_mime(filename: str) -> str:
@@ -192,16 +213,19 @@ def _process_stream_chunk(chunk, rendered_ids: set):
 def render_chat():
     """Render the chat interface with message history and streaming responses."""
     # Display message history
-    for i, msg in enumerate(st.session_state.get("messages", [])):
+    messages = st.session_state.get("messages", [])
+    logger.info(f"[UI] Rendering {len(messages)} messages from history")
+    for i, msg in enumerate(messages):
         role = msg["role"]
         content = msg["content"]
 
         with st.chat_message(role):
-            # Re-render stored tool call steps
+            # Re-render stored tool call steps (with outputs)
             for step in msg.get("steps", []):
                 _render_tool_call(
                     tool_name=step["name"],
                     tool_input=step["input"],
+                    tool_output=step.get("output"),  # Include tool output for history
                 )
 
             if content:
@@ -227,6 +251,7 @@ def render_chat():
 
     # Store user message
     st.session_state["messages"].append({"role": "user", "content": user_query})
+    logger.info(f"[UI] Saved user message to history. Total messages: {len(st.session_state['messages'])}")
 
     # Get sandbox manager and session ID
     sandbox_manager = st.session_state.get("sandbox_manager")
@@ -291,7 +316,7 @@ def render_chat():
             ):
                 _process_stream_chunk(chunk, rendered_ids)
 
-                # Collect tool calls + text for message history (skip already-seen messages)
+                # Collect tool calls + outputs for message history (skip already-seen messages)
                 if not isinstance(chunk, dict):
                     continue
                 for _node_name, node_output in chunk.items():
@@ -301,15 +326,32 @@ def render_chat():
                         if msg_id and msg_id in rendered_ids:
                             continue  # Already processed in _process_stream_chunk
 
-                        if getattr(msg, "type", None) == "ai":
+                        msg_type = getattr(msg, "type", None)
+
+                        # AI message: collect tool calls (inputs)
+                        if msg_type == "ai":
                             for tc in getattr(msg, "tool_calls", []):
                                 collected_steps.append({
                                     "name": tc.get("name", "unknown"),
                                     "input": tc.get("args", {}),
+                                    "call_id": tc.get("id"),  # For matching with tool output
+                                    "output": None,  # Will be filled by tool message
                                 })
                             content = getattr(msg, "content", "")
                             if content and not getattr(msg, "tool_calls", []):
                                 full_response += content
+
+                        # Tool message: collect tool output and match with tool call
+                        elif msg_type == "tool":
+                            tool_call_id = getattr(msg, "tool_call_id", None)
+                            tool_content = getattr(msg, "content", "") or ""
+
+                            # Find matching tool call in collected_steps and add output
+                            if tool_call_id:
+                                for step in collected_steps:
+                                    if step.get("call_id") == tool_call_id:
+                                        step["output"] = tool_content
+                                        break
 
         except GraphRecursionError:
             st.warning(
@@ -344,3 +386,4 @@ def render_chat():
             "downloads": collected_downloads,
         },
     })
+    logger.info(f"[UI] Saved assistant message to history. Total messages: {len(st.session_state['messages'])}, Steps: {len(collected_steps)}")
