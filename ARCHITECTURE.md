@@ -1,5 +1,84 @@
 # Architecture Diagram
 
+> **Last Updated:** 2026-03-31
+> **Version:** 1.2 (with tool output persistence & execute isolation self-check)
+
+## 🎯 End-to-End Flow (60 Second Overview)
+
+```
+1. User uploads Excel (45MB, 2 sheets) → Streamlit sidebar
+                ↓
+2. Skill System detects: .xlsx + ≥40MB → loads skills/xlsx/SKILL.md + large_files.md
+                ↓
+3. Background Thread: Daytona sandbox creates + installs packages (weasyprint, pandas, duckdb)
+                ↓
+4. User asks: "Aylık satış trendini analiz et, PDF rapor ver"
+                ↓
+5. Agent (Claude Sonnet 4) starts ReAct loop:
+   │
+   ├─ parse_file("file.xlsx") → schema + "⚠️ DuckDB kullan" warning
+   │  Output: columns, dtypes, 100 rows preview
+   │
+   ├─ execute #1: Excel → CSV per sheet (DuckDB prep)
+   │  Output: "525K rows → temp_sheet1.csv (44.6 MB)"
+   │
+   ├─ execute #2: DuckDB queries + metrics + WeasyPrint PDF
+   │  │  df → m = {'total': ..., 'avg': ...}  ← metric dict
+   │  │  html = f"<h3>{m['total']}</h3>"  ← inject metrics
+   │  │  weasyprint.HTML(string=html).write_pdf(...)
+   │  Output: "✅ PDF: rapor.pdf (21 KB)"
+   │
+   └─ download_file("rapor.pdf") → ArtifactStore → st.download_button
+                ↓
+6. Chat history saves: tool inputs + outputs (call_id matching)
+                ↓
+7. User refreshes page → history re-renders with all tool outputs intact
+```
+
+**Key Innovation:** Tool outputs (execute stdout, parse_file schema) persist in chat history via `call_id` matching - not lost after streaming.
+
+## Table of Contents
+
+1. [Quick Summary](#quick-summary) — Tech stack, key features, critical patterns
+2. [System Overview](#system-overview) — Component diagram (UI, Skills, Agent, Sandbox)
+3. [Data Flow](#data-flow--typical-analysis-request) — Typical analysis request lifecycle
+4. [Smart Interceptor](#smart-interceptor--tool-call-control-layer) — Tool call control (block/rate-limit/auto-fix)
+5. [Session & Sandbox Lifecycle](#session--sandbox-lifecycle) — Browser open → prewarm → cleanup
+6. [Message Persistence](#message-persistence--tool-output-tracking-new) — Tool output tracking (NEW)
+7. [Message Deduplication](#message-deduplication-rendered_ids-set) — rendered_ids set (NEW)
+8. [Thread-Safe Artifacts](#thread-safe-artifact-passing) — ArtifactStore pattern
+9. [Progressive Disclosure](#progressive-disclosure-flow-skill-loading) — Skill loading triggers
+10. [Execute Isolation](#execute-to-execute-data-flow-pickle-pattern) — Pickle pattern + self-check (NEW)
+11. [Module Dependencies](#module-dependency-graph) — Import graph
+12. [Configuration](#key-configuration) — Model, timeouts, limits, paths
+13. [Pre-installed Packages](#pre-installed-packages-sandbox) — Critical vs Optional split (UPDATED)
+14. [Recent Updates](#recent-updates-last-10-commits) — Changelog (NEW)
+15. [Documentation Index](#documentation-index) — Links to other guides
+
+## Quick Summary
+
+**What:** AI agent that analyzes Excel/CSV/PDF files using Claude Sonnet 4 + LangChain + Daytona sandboxed execution. Generates PDF reports and interactive HTML dashboards via Streamlit.
+
+**Tech Stack:**
+- **Frontend:** Streamlit (chat UI + file upload)
+- **Agent:** LangChain `create_agent` + Claude Sonnet 4 (ReAct pattern)
+- **Execution:** Daytona sandbox (isolated Python subprocess per execute)
+- **Storage:** LangGraph MemorySaver (conversation state per thread_id)
+- **Skills:** Progressive disclosure (load based on file type/size/keywords)
+
+**Key Features:**
+- 📋 **Tool Output Persistence**: Execute/parse_file outputs saved in chat history (call_id matching)
+- 🔒 **Execute Isolation**: Each execute() = separate subprocess, variables don't carry over
+- 🛡️ **Smart Interceptor**: Blocks shell commands, pip install, network requests, sampling
+- 🚀 **Package Pre-warming**: Background thread installs packages while UI loads
+- 🎯 **Self-Verification**: Agent checks variable scope before artifact generation (RULE 3)
+
+**Critical Patterns:**
+1. **Pickle Pattern**: Execute #1 saves to `/home/daytona/clean.pkl` → Execute #2 reads it
+2. **DuckDB Pattern**: Files ≥40MB → Excel→CSV→DuckDB (lazy queries)
+3. **Metric Dict**: All calculations in SAME execute as PDF/HTML generation
+4. **Deduplication**: `rendered_ids` set prevents message replay during streaming
+
 ## System Overview
 
 ```
@@ -67,8 +146,8 @@
 │  │                                                                    │  │
 │  │       Output formats (single or multi-format):                     │  │
 │  │       • PDF: weasyprint (HTML→PDF, Turkish chars)                  │  │
-│  │       • PPTX: python-pptx + matplotlib charts (downloadable)       │  │
-│  │       • HTML: Chart.js interactive dashboard (browser iframe)      │  │
+│  │       • PPTX: python-pptx + matplotlib charts (optional package)   │  │
+│  │       • HTML: Plotly.js/Chart.js dashboard (browser iframe)        │  │
 │  │       • Excel: openpyxl/xlsxwriter (editable data)                 │  │
 │  │       User can request: single format OR multi-format combo        │  │
 │  │                                                                    │  │
@@ -116,10 +195,10 @@
    │ CUSTOM     │  │ CUSTOM   │  │ CUSTOM       │  │ CUSTOM       │
    │            │  │          │  │              │  │              │
    │ • headers  │  │ • Plotly │  │ • matplotlib │  │ • read file  │
-   │ • 100 rows │  │ • D3.js  │  │ • seaborn    │  │   from sbx   │
+   │ • 100 rows │  │ • Chart.j│  │ • seaborn    │  │   from sbx   │
    │ • dtypes   │  │ • CSS    │  │ • PNG output │  │ • st download│
-   │ • file size│  │ • tables │  │              │  │   button     │
-   │ • sheets   │  │ • Chart.j│  │              │  │              │
+   │ • file size│  │ • SVG    │  │              │  │   button     │
+   │ • sheets   │  │ • tables │  │              │  │              │
    └─────┬──────┘  └─────┬────┘  └──────┬───────┘  └──────┬───────┘
          │               │              │                  │
          │               ▼              │                  │
@@ -243,8 +322,18 @@
                │  • artifact_store.pop_html()      → iframe render  │
                │  • artifact_store.pop_charts()    → st.image()     │
                │  • artifact_store.pop_downloads() → download btn   │
-               │  • collected_steps saved to message history         │
-               │  • Re-rendered on page rerun (persistent steps)    │
+               │                                                    │
+               │  Message Persistence (NEW):                        │
+               │  • collected_steps: [{name, input, call_id, output}]│
+               │  • Tool call matching: AI msg.tool_calls[].id      │
+               │    ↔ Tool msg.tool_call_id → pair output with input│
+               │  • Saved to session_state["messages"][]["steps"]   │
+               │  • Re-rendered on history with tool outputs        │
+               │                                                    │
+               │  Deduplication (rendered_ids set):                 │
+               │  • Track msg.id in session_state["_rendered_ids"]  │
+               │  • Skip messages already rendered (prevents replay)│
+               │  • Persists across queries in same session         │
                └────────────────────────────────────────────────────┘
 ```
 
@@ -315,9 +404,11 @@
 │           ├─ Phase 2: check installed packages, pip missing only │
 │           │   • Critical (blocks ready): weasyprint, pandas,     │
 │           │     openpyxl, xlsxwriter, numpy, matplotlib,         │
-│           │     seaborn, plotly, scipy, scikit-learn, python-pptx│
-│           │   • Optional (background): pdfplumber, duckdb        │
+│           │     seaborn, plotly, scipy, scikit-learn             │
+│           │   • Optional (background): pdfplumber, duckdb,       │
+│           │     python-pptx (moved: rarely used, ~15-20s)        │
 │           ├─ Phase 3: verify critical imports (must succeed)     │
+│           │   → import weasyprint, pandas, openpyxl (NOT pptx)   │
 │           └─ _packages_ready.set() [only if verification OK]     │
 │                                                                  │
 │  atexit.register(mgr.stop) — cleanup on process exit             │
@@ -334,6 +425,71 @@
 │     • Old sandbox stopped, new SandboxManager created            │
 │     • sandbox_prewarm_done cleared (triggers re-prewarm)         │
 └──────────────────────────────────────────────────────────────────┘
+```
+
+## Message Persistence & Tool Output Tracking (NEW)
+
+**Problem:** Tool outputs (execute, parse_file) were lost after streaming. History showed tool calls but not their results.
+
+**Solution (commits 07c3123, 3ac8e62, ee097d5):**
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  Streaming Phase (chat.py:318-350)                                  │
+│                                                                     │
+│  AI Message arrives:                                                │
+│  ├─ tool_calls = [{id: "call_abc", name: "execute", args: {...}}]  │
+│  ├─ Append to collected_steps:                                     │
+│  │   {name: "execute", input: {...}, call_id: "call_abc",          │
+│  │    output: None}  ← Initially empty                             │
+│  └─ Render tool call UI (collapsible status block)                 │
+│                                                                     │
+│  Tool Message arrives (later in stream):                            │
+│  ├─ tool_call_id = "call_abc"                                      │
+│  ├─ content = "Metrics calculated\n✅ Done"                         │
+│  ├─ Find matching step by call_id in collected_steps               │
+│  └─ step["output"] = content  ← Paired!                            │
+│                                                                     │
+│  After stream completes:                                            │
+│  └─ Save to session_state["messages"][-1]["steps"] with outputs    │
+└─────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────┐
+│  History Rendering (chat.py:215-229)                                │
+│                                                                     │
+│  for msg in session_state["messages"]:                              │
+│    for step in msg["steps"]:                                        │
+│      _render_tool_call(                                             │
+│        tool_name=step["name"],                                      │
+│        tool_input=step["input"],                                    │
+│        tool_output=step.get("output")  ← NOW AVAILABLE             │
+│      )                                                              │
+│                                                                     │
+│  Tool outputs rendered in expanders:                                │
+│  • execute → "📤 Execute Output" (collapsed by default)             │
+│  • parse_file → "📋 Schema Info" (collapsed by default)             │
+│  • Blocked calls filtered out (⛔ markers detected)                  │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+## Message Deduplication (rendered_ids Set)
+
+**Problem:** Same message IDs rendered multiple times during streaming (history replay).
+
+**Solution (commit ee097d5):**
+
+```
+session_state["_rendered_ids"] = set()  ← Persists across queries
+
+During streaming (_process_stream_chunk):
+  msg_id = getattr(msg, "id", None)
+  if msg_id and msg_id in rendered_ids:
+    continue  ← Skip already rendered
+  if msg_id:
+    rendered_ids.add(msg_id)  ← Track as rendered
+
+NOTE: collected_steps does NOT use deduplication - we want ALL messages
+from current turn for persistence to session_state["messages"].
 ```
 
 ## Thread-Safe Artifact Passing
@@ -487,8 +643,10 @@ app.py
 | Phase    | Packages                                                                          |
 |----------|-----------------------------------------------------------------------------------|
 | Critical | weasyprint, pandas, openpyxl, xlsxwriter, numpy, matplotlib, seaborn, plotly, scipy, scikit-learn |
-| Optional | pdfplumber, duckdb (background thread, after ready signal)                        |
+| Optional | pdfplumber, duckdb, python-pptx (background thread, after ready signal)           |
 | Fonts    | DejaVuSans.ttf, DejaVuSans-Bold.ttf (cp from /usr/share/fonts/truetype/dejavu/)   |
+
+**Note:** python-pptx moved from Critical to Optional (commit af46e37) to prevent timeout - PowerPoint generation is rarely used and slow to install (~15-20s).
 
 ## Sandbox Disk Management
 
@@ -523,16 +681,246 @@ Execute 1 (clean + save):          Execute 2 (analyze + PDF):
 For DuckDB (≥40MB): CSV replaces pickle
   Execute 1: df.to_csv('/home/daytona/temp_sheet.csv'); del df
   Execute 2: duckdb.sql("SELECT ... FROM read_csv_auto('...csv')")
+```
+
+## Execute Isolation Self-Check (NEW - commit b0ebf82)
+
+**Critical Pattern:** Each execute() runs in a SEPARATE Python subprocess. Variables DO NOT carry over.
+
+**Common Bug (auto-detected now):**
+```
+Execute #1:
+  m = {'total_orders': 36969, 'revenue': 17743429.18}
+  print('Metrics calculated')
+
+Execute #2:  ← NEW subprocess!
+  html = f"<h3>{m['total_orders']}</h3>"  ← NameError: m undefined
+  generate_html(html_code=html)
+  Result: Empty KPI cards in dashboard
+```
+
+**Correct Pattern (enforced by RULE 3):**
+```
+Single Execute:
+  df = pd.read_pickle('/home/daytona/clean.pkl')
+  m = {'total': df['amount'].sum(), 'avg': df['amount'].mean()}
+  chart_data = df.groupby('month')['revenue'].sum().tolist()
+
+  html = f'''
+  <h3>{m['total']:,}</h3>  ← m defined in THIS scope
+  <script>const data = {chart_data};</script>  ← chart_data defined
+  '''
+  generate_html(html_code=html)
+```
+
+**Agent Self-Verification (prompts.py RULE 3):**
+
+Before generate_html() or PDF generation:
+1. Check: Are ALL variables (m dict, chart arrays, dataframes) in current scope?
+2. If NO → merge calculations into this execute OR recalculate here
+3. Never assume previous execute variables will "just work"
+
+**Self-Correction Trigger:**
+If user reports empty dashboard/PDF → immediately recognize as execute
+isolation violation and regenerate with single-execute pattern.
+
+## Recent Updates (Last 10 Commits)
+
+| Commit | Date | Change |
+|--------|------|--------|
+| b0ebf82 | 2026-03-31 | **Execute Isolation Self-Check**: Added RULE 3 pre-flight checklist before artifact generation |
+| af46e37 | 2026-03-31 | **python-pptx → Optional**: Moved from critical to optional packages (prevents timeout) |
+| 07c3123 | 2026-03-31 | **Tool Output Persistence**: call_id matching system to persist execute/parse_file outputs |
+| ee097d5 | 2026-03-31 | **Deduplication**: rendered_ids set in session_state prevents history replay |
+| be1a283 | 2026-03-31 | **Logging Cleanup**: Removed debug logs, kept only meaningful state changes |
+| 6bcc8d0 | 2026-03-31 | **Message Dedup Fix**: Prevent duplicate messages in collected_steps |
+| a6c426f | 2026-03-30 | **UI Enhancement**: Show execute and parse_file outputs in expanders |
 
 ## Documentation Index
 
 | File | İçerik |
 |---|---|
-| `ARCHITECTURE.md` | Sistem mimarisi, bileşenler, veri akışı, interceptor kuralları |
+| `ARCHITECTURE.md` | **[THIS FILE]** Sistem mimarisi, bileşenler, veri akışı, interceptor kuralları, message persistence, execute isolation |
 | `TECHNICAL_GUIDE.md` | Teknik detaylar: pickle/CSV pattern, execute izolasyonu, skill sistemi, ArtifactStore, disk yönetimi |
-| `skills/xlsx/SKILL.md` | Excel analiz kuralları, sheet tespiti, pivot format, WeasyPrint PDF, DuckDB stratejileri |
+| `CLAUDE.md` | **[START HERE]** Quick start, critical patterns (execute isolation, ReAct loop), common issues, testing workflow |
+| `skills/xlsx/SKILL.md` | Excel analiz kuralları, sheet tespiti, pivot format, WeasyPrint PDF, DuckDB stratejileri, **self-check** |
 | `skills/xlsx/references/large_files.md` | ≥40MB dosyalar: Excel→CSV→DuckDB, UNION ALL, multi-sheet pattern |
 | `skills/xlsx/references/multi_file_joins.md` | Çoklu dosya JOIN pattern |
 | `skills/csv/SKILL.md` | CSV analiz kuralları, pickle, DuckDB |
 | `skills/pdf/SKILL.md` | PDF okuma, pdfplumber, OCR |
+| `skills/visualization/SKILL.md` | Chart selection guide, Plotly.js (interactive), matplotlib (static) |
+
+---
+
+## 🏗️ Architectural Decisions (Why These Choices?)
+
+### 1. ReAct vs Plan-and-Execute
+
+**Decision:** ReAct (Reason → Act → Observe loop)
+
+**Why:**
+- Excel analysis requires **adaptive exploration** (multi-sheet detection, schema surprises)
+- User queries are often **vague** ("analiz et" → what exactly?)
+- ReAct discovers structure incrementally: parse → clean → analyze → adjust
+- Plan-and-Execute requires upfront complete plan → fails when schema changes mid-task
+
+**Trade-off:**
+- ✅ Handles unexpected data structures (merged cells, multi-sheet, missing columns)
+- ❌ More LLM calls (each observation → new reasoning step)
+
+See: [docs/REACT_VS_PLAN_EXECUTE.md](docs/REACT_VS_PLAN_EXECUTE.md)
+
+---
+
+### 2. Smart Interceptor (Block Shell Commands)
+
+**Decision:** Block `ls`, `find`, `cat`, `head`, `glob.glob` in execute()
+
+**Why:**
+- Agent doesn't need filesystem exploration → file paths known from `parse_file`
+- Prevents wasted execute quota on `ls /home/daytona` (agent already knows file uploaded)
+- Prevents infinite loops: `parse_file → ls → cat → parse_file → ...`
+- Security: no arbitrary file reading
+
+**Implementation:** `@wrap_tool_call` decorator intercepts before execution
+
+**Trade-off:**
+- ✅ Saves 2-3 execute calls per query (ls, find, cat)
+- ✅ Circuit breaker: 2 consecutive blocks → force error (stops infinite loops)
+- ❌ Agent must trust parse_file schema (can't "verify" with head/cat)
+
+---
+
+### 3. Tool Output Persistence (call_id Matching)
+
+**Decision:** Store tool outputs in session_state["messages"][]["steps"]
+
+**Why:**
+- Users expect to see "what did the agent do?" after page refresh
+- Execute outputs contain verification logs ("✅ 36,969 orders processed")
+- Debugging: "Why did analysis fail?" → check execute output in history
+- Transparency: Show schema info, SQL queries, data transformations
+
+**Implementation:**
+```python
+AI msg.tool_calls[i].id == Tool msg.tool_call_id → pair them
+collected_steps[i]["output"] = tool_message.content
+```
+
+**Trade-off:**
+- ✅ Full traceability in chat history
+- ✅ No additional LLM calls (just metadata tracking)
+- ❌ +2KB per execute output in session storage (acceptable for 10-20 messages)
+
+---
+
+### 4. DuckDB for Files ≥40MB
+
+**Decision:** Auto-switch to DuckDB when file ≥40MB (progressive disclosure)
+
+**Why:**
+- Pandas loads entire file into RAM → MemoryError on 100MB+ files
+- DuckDB lazy evaluation → queries run on disk, not memory
+- Excel→CSV conversion once → multiple queries without re-reading Excel
+
+**Trade-off:**
+- ✅ Handles files up to 500MB+ on limited RAM
+- ✅ SQL syntax → complex joins/aggregations more readable
+- ❌ Extra step: Excel→CSV conversion (adds 1 execute call)
+- ❌ csv_paths dict must be redeclared in every execute (isolation pattern)
+
+---
+
+### 5. Package Pre-warming (Critical vs Optional Split)
+
+**Decision:** Split packages into Critical (blocks ready) vs Optional (background)
+
+**Why:**
+- User expects "ready" after 10-15s, not 60s
+- 90% of queries use: pandas, weasyprint, openpyxl (fast to install)
+- 10% of queries use: duckdb, python-pptx, pdfplumber (slow to install)
+- Don't block UI for rarely-used packages
+
+**Implementation:**
+- Critical: `pip install weasyprint pandas openpyxl` → verify → set ready flag
+- Optional: Background thread installs duckdb/pptx AFTER ready signal
+
+**Trade-off:**
+- ✅ First query ready in ~15s instead of ~60s
+- ❌ If user immediately asks for PPTX → may hit "module not found" (rare)
+
+---
+
+### 6. Turkish Output, English Prompt
+
+**Decision:** System prompt in English, agent responses in Turkish
+
+**Why:**
+- Claude Sonnet 4 reasoning is **stronger in English** (training data distribution)
+- Turkish prompt → tool call args in Turkish → breaks schema matching
+- Internal reasoning (DÜŞÜNCE blocks) can be Turkish for user transparency
+
+**Example:**
+```
+DÜŞÜNCE: InvoiceDate kolonunu datetime'a çevirmem lazım...  ← Turkish OK
+execute("df['InvoiceDate'] = pd.to_datetime(...)")  ← English code
+```
+
+**Trade-off:**
+- ✅ Better reasoning quality, fewer hallucinations
+- ✅ Tool calls use English schema (matches actual column names)
+- ❌ Prompt engineering slightly more complex (language mixing)
+
+---
+
+### 7. Metric Dict Pattern (m = {...})
+
+**Decision:** Always use `m = {'total': ..., 'avg': ...}` dict for reports
+
+**Why:**
+- Prevents hardcoded numbers: Agent can't copy "36,969" from previous execute output
+- Forces recalculation: `m['total'] = df['col'].sum()` ensures fresh data
+- Type safety: dict values are Python types, not strings
+- Single source of truth: metric used in PDF and HTML from same calculation
+
+**Enforced by:** prompts.py RULE 3, skills/xlsx/SKILL.md line 133-146
+
+**Trade-off:**
+- ✅ Zero hallucination risk (numbers must be calculated)
+- ✅ Easy to verify: print(m) before PDF generation
+- ❌ Slightly verbose (could use individual variables)
+
+---
+
+### 8. No Filesystem Tools for Agent
+
+**Decision:** Agent has NO access to os.listdir, glob, pathlib
+
+**Why:**
+- File paths are deterministic: `/home/daytona/{uploaded_filename}`
+- parse_file already provides schema → no need to "discover" files
+- Prevents exploration waste: agent can't wander filesystem
+
+**Blocked patterns:**
+```python
+import os; os.listdir('/home/daytona')  ← Interceptor blocks
+import glob; glob.glob('*.csv')  ← Interceptor blocks
+```
+
+**Trade-off:**
+- ✅ Faster queries (no wasted execute on ls/find)
+- ✅ Security: can't read sandbox config files
+- ❌ Agent must trust upload succeeded (can't verify with ls)
+
+---
+
+## 📊 Performance Metrics
+
+| Metric | Value | Note |
+|--------|-------|------|
+| First query latency | ~35s | Sandbox creation (5s) + package install (15s) + first execute (15s) |
+| Subsequent queries | ~8-12s | Reuse sandbox + agent cache, only execute time |
+| Memory per session | ~200MB | Agent + checkpointer + session state + sandbox overhead |
+| Concurrent users | ~50-100 | Bottleneck: Daytona disk limit (30GB) + API rate limits |
+| Execute call budget | 6-10/query | Dynamic: simple queries 6, complex 10 (DuckDB multi-sheet) |
 
