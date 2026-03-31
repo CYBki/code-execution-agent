@@ -145,6 +145,49 @@ m = {
 ```
 Analiz pickle'dan, tablo verileri ve PDF üretimi **tek bir execute** içinde tamamlanmalı.
 
+### SELF-CHECK: Artifact Generation Öncesi Kontrol (MANDATORY)
+
+⚠️ **Before EVERY `generate_html()` or WeasyPrint PDF call, verify variable scope:**
+
+```
+DUSUNCE: [Pre-flight check before artifact generation]
+[ ] m dict bu execute'da hesaplandi mi? (Onceki execute'da ise UNDEFINED)
+[ ] Chart data arrays (monthly_labels, revenues, etc.) bu scope'da mi?
+[ ] DataFrame'ler (top_products, top_customers) bu execute'da mi?
+[ ] Hepsi OK ise -> artifact generation yap
+[ ] Herhangi biri eksikse -> hesaplamayi bu execute'a tasi
+```
+
+**Real example of the bug:**
+```
+# Execute #4
+m = {'total_orders': 36969, ...}  # Calculated here
+print('Metrics ready')
+
+# Execute #5 (WRONG - NEW subprocess!)
+html = f"<h3>{m['total_orders']}</h3>"  # m undefined -> empty KPI cards
+generate_html(html_code=html)
+```
+
+**Fixed version:**
+```
+# CORRECT: Single execute - calculation + HTML together
+df = pd.read_pickle('/home/daytona/clean.pkl')
+m = {'total_orders': df['Invoice'].nunique(), ...}
+monthly_data = df.groupby('month')['revenue'].sum().tolist()
+
+html = f'''
+<h3>{m['total_orders']:,}</h3>  <!-- m is defined -->
+<script>const data = {monthly_data};</script>  <!-- monthly_data defined -->
+'''
+generate_html(html_code=html)
+```
+
+**If user reports empty dashboard/PDF:**
+1. Immediately recognize: "Execute isolation violation"
+2. Regenerate with single execute pattern
+3. DO NOT wait for user to explain — catch this yourself
+
 ## Quick Start
 
 ### Reading Excel Files — Önce Sheet Sayısını Kontrol Et

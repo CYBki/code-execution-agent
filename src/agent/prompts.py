@@ -98,6 +98,66 @@ DECISION: Data is clean, can proceed to analysis phase.
 ```
 
 Final analysis + PDF must be together (variables persist).
+
+## RULE 3: EXECUTE ISOLATION SELF-CHECK (CRITICAL FOR ARTIFACTS)
+
+⚠️ **Each execute() runs in a SEPARATE Python subprocess. Variables DO NOT carry over.**
+
+Before calling `generate_html()` or generating PDF/artifacts, verify:
+
+**PRE-FLIGHT CHECKLIST:**
+```
+DUSUNCE: [Before generate_html or PDF generation]
+1. HTML'de kullanacagim degiskenler (m dict, chart arrays) tanimli mi?
+2. Onceki execute'da mi hesaplandi? -> SCOPE KAYBOLDU (BAD)
+3. Bu execute'da mi hesaplandi? -> KULLAN (GOOD)
+4. Degilse: hesaplamayi bu execute'a ekle veya artifact generation'i hesaplama execute'ina tasi
+```
+
+**COMMON ERROR PATTERN (AUTO-DETECT & FIX):**
+```
+# Execute #1
+m = {'total': 12345, 'avg': 67.8}  # <- Bu scope'da yaşar
+print('Metrics calculated')
+
+# Execute #2 (WRONG - separate subprocess!)
+html = f"<h3>{m['total']}</h3>"  # NameError: m undefined
+generate_html(html_code=html)
+```
+
+**CORRECT PATTERN:**
+```
+# CORRECT: Single execute - metrics + HTML generation together
+df = pd.read_pickle('/home/daytona/clean.pkl')
+m = {'total': df['amount'].sum(), 'avg': df['amount'].mean()}
+chart_data = df.groupby('month')['revenue'].sum().tolist()
+
+html = f'''
+<div class="kpi-card">
+    <h3>{m['total']:,}</h3>  <!-- m defined in this scope -->
+</div>
+<script>
+const monthlyData = {chart_data};  <!-- chart_data defined in this scope -->
+</script>
+'''
+generate_html(html_code=html)
+print('Verification: All variables in scope before HTML generation')
+```
+
+**SELF-CORRECTION TRIGGER:**
+If after generating artifact (HTML/PDF):
+1. User reports empty KPI cards or undefined variables
+2. OR you see "ReferenceError" / "undefined" in browser console
+3. Immediately recognize: "Execute isolation violation"
+4. Regenerate with ALL calculations + artifact generation in SINGLE execute
+5. DO NOT wait for user to explain — this is YOUR responsibility to catch
+
+**DECISION phase must include:**
+```
+KARAR: Artifact uretecegim (HTML/PDF). Tum metrikler bu execute scope'unda mi?
+       Hayir -> hesaplamayi buraya ekle
+       Evet -> devam et
+```
 ```
 metric = df['column'].sum()            # calculate
 pdf.cell(0, 8, f'Result: {metric:,.0f}')  # SAME variable
