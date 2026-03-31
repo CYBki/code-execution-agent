@@ -182,17 +182,17 @@ class SandboxManager:
 
             # Phase 2: Check packages — split into CRITICAL (must be ready) and OPTIONAL (background)
             # Critical: needed for every analysis (fast to install, ~10s)
-            # Optional: heavy wheels used rarely (duckdb, pdfplumber)
+            # Optional: heavy wheels used rarely (duckdb, pdfplumber, python-pptx)
             critical_pkgs = {
                 "weasyprint": "weasyprint", "pandas": "pandas", "openpyxl": "openpyxl",
                 "xlsxwriter": "xlsxwriter", "numpy": "numpy",
                 "matplotlib": "matplotlib", "seaborn": "seaborn",
                 "plotly": "plotly", "scipy": "scipy", "scikit-learn": "sklearn",
-                "python-pptx": "pptx",  # PowerPoint generation (moved to critical)
             }
             optional_pkgs = {
                 "pdfplumber": "pdfplumber",
                 "duckdb": "duckdb",
+                "python-pptx": "pptx",  # PowerPoint generation (rarely used, slow to install)
             }
             all_pkgs = {**critical_pkgs, **optional_pkgs}
 
@@ -260,9 +260,9 @@ class SandboxManager:
                     target=_install_optional, args=(missing_optional,), daemon=True
                 ).start()
 
-            # Phase 3: Verify critical packages
+            # Phase 3: Verify critical packages (pptx is optional, not verified)
             verify = be.execute(
-                "python3 -c 'import weasyprint, pandas, openpyxl, pptx; print(\"VERIFY_OK\")' 2>&1"
+                "python3 -c 'import weasyprint, pandas, openpyxl; print(\"VERIFY_OK\")' 2>&1"
             )
             v_out = getattr(verify, 'output', '') or ''
             if "VERIFY_OK" in v_out:
