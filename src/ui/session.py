@@ -95,6 +95,8 @@ def reset_session():
     # Clear file upload fingerprint so files are re-uploaded
     st.session_state.pop("_files_uploaded", None)
     st.session_state.pop("sandbox_prewarm_error", None)
+    # Clear rendered message IDs so history doesn't replay
+    st.session_state.pop("_rendered_ids", None)
 
     # REUSE sandbox — clean workspace files but keep packages installed
     mgr = st.session_state.get("sandbox_manager")

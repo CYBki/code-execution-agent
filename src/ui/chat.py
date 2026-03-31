@@ -283,7 +283,11 @@ def render_chat():
     with st.chat_message("assistant"):
         full_response = ""
         collected_steps = []  # Persist tool call steps for history
-        rendered_ids = set()  # Track rendered message IDs (dedup)
+
+        # Track rendered message IDs (persist across queries in same session)
+        if "_rendered_ids" not in st.session_state:
+            st.session_state["_rendered_ids"] = set()
+        rendered_ids = st.session_state["_rendered_ids"]
 
         try:
             for chunk in agent.stream(
