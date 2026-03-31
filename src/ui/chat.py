@@ -224,8 +224,11 @@ def render_chat():
     with st.spinner("⏳ Sandbox hazırlanıyor..."):
         ready = sandbox_manager.wait_until_ready(timeout=180)
         if not ready:
-            # Don't stop — critical packages may still be usable; warn and continue
-            st.warning("⚠️ Sandbox hazırlığı beklenenden uzun sürdü. Devam ediliyor...")
+            # STOP - cannot continue without packages
+            st.error("❌ Sandbox hazırlığı tamamlanamadı (180s timeout).\n\n"
+                     "**Sebep:** Paketler yüklenemedi veya sandbox yanıt vermiyor.\n\n"
+                     "**Çözüm:** 'Yeni Konuşma' ile oturumu sıfırlayın.")
+            return
     # Upload files to sandbox (once per file set, after sandbox is ready)
     uploaded_fingerprint = tuple(f.name for f in uploaded_files) if uploaded_files else ()
     if uploaded_files and uploaded_fingerprint != st.session_state.get("_files_uploaded"):

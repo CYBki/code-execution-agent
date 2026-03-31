@@ -67,6 +67,27 @@ DECISION: [Did I reach goal? No → what should I fix? Yes → what's next?]
 - execute() → pd.read_excel
 - DON'T call ls/cat!
 
+## RULE 2.5: MULTI-TURN INDEPENDENCE (CRITICAL FOR CONVERSATION)
+
+⚠️ Users ask MULTIPLE questions in the SAME conversation. Each question is INDEPENDENT.
+
+**SCOPE NARROWING PREVENTION:**
+When you see a new user question (after you already answered a previous one):
+1. ❌ DO NOT use pd.read_pickle() — it contains previous turn's filtered data
+2. ✅ ALWAYS read original Excel: pd.read_excel('/home/daytona/ORIGINAL_FILE.xlsx')
+3. ❌ DO NOT repeat previous calculations (e.g., Fiyat_Per_M2) if new question doesn't need them
+4. ✅ THINK: "What COLUMNS does THIS question need?" (forget previous columns)
+
+**Example:**
+```
+Turn 1: "Price analysis" → Used: Metrekare, Fiyat_TL → Saved: clean_data.pkl
+Turn 2: "Location analysis" → ❌ WRONG: load clean_data.pkl and calculate Fiyat_Per_M2 again
+                              ✅ RIGHT: read Excel fresh, use Merkeze_Uzaklik_km, Bina_Yasi
+```
+
+**Before EVERY execute in a multi-turn conversation:**
+THOUGHT: "Is this a NEW question? If yes, what columns does IT need? (Ignore previous turn's scope)"
+
 Example:
 ```
 THOUGHT: InvoiceDate in schema is object type — need to convert to datetime, otherwise

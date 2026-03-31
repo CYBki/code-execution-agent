@@ -236,6 +236,26 @@ def build_agent(
                     tool_call_id=tool_call_id,
                 )
 
+            # Block pickle usage in early executes (multi-turn scope narrowing prevention)
+            # Allow pickle only in later phases (report generation)
+            if _execute_count <= 2 and "read_pickle" in cmd:
+                logger.info("[Tool] BLOCKED pickle usage in execute #%d (scope narrowing prevention)", _execute_count)
+                _execute_count -= 1
+                # Show available Excel files from parse_file calls
+                file_list = "\n".join(f"  - /home/daytona/{fn}" for fn in _seen_parse_files) if _seen_parse_files else ""
+                return ToolMessage(
+                    content=f"⛔ pd.read_pickle() BLOKLANDΙ (execute #{_execute_count + 1}, multi-turn scope narrowing önlemi)\n\n"
+                            "SEBEP: Pickle dosyası önceki turn'ün filtrelenmiş verisini içerebilir.\n"
+                            "Bu yeni soru için VERİYİ DOĞRUDAN EXCEL'DEN OKU:\n\n"
+                            f"Mevcut dosya(lar):\n{file_list or '  (parse_file henüz çağrılmadı)'}\n\n"
+                            "YAPMAN GEREKEN:\n"
+                            "df = pd.read_excel('/home/daytona/DOSYA.xlsx')  # Pickle değil, Excel!\n"
+                            "# Sonra analizini yap\n\n"
+                            "⚠️ RULE 2.5: Her yeni soru bağımsızdır, önceki pickle'ı kullanma.\n"
+                            "Execute hakkın düşmedi, kodu Excel okuyacak şekilde düzelt.",
+                    tool_call_id=tool_call_id,
+                )
+
             # Block bare shell commands (ls, find, cat, etc.)
             # Check both direct commands and python3 -c wrapped code
             bare_cmd = cmd.strip().split()[0] if cmd.strip() else ""

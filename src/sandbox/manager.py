@@ -88,18 +88,34 @@ class SandboxManager:
                 self._sandbox = None
                 self._packages_ready = threading.Event()
             else:
+                # REUSE existing sandbox regardless of thread_id
+                logger.info("Reusing cached sandbox %s (ignoring new thread_id for UX)", self._sandbox.id)
                 return self._backend
         if self._backend is not None:
             return self._backend
 
+        # Try to find ANY existing sandbox (not by thread_id)
+        # This allows "Yeni Konuşma" to reuse sandbox without waiting for package install
         try:
-            existing = self._find_existing(thread_id)
-            if existing:
-                logger.info("Found existing sandbox %s", existing.id)
+            result = self._client.list(labels={})
+            sandboxes = result.items if hasattr(result, 'items') else list(result)
+            usable = [
+                s for s in sandboxes
+                if getattr(s, 'state', None) not in (
+                    SandboxState.DESTROYED, SandboxState.DESTROYING,
+                    SandboxState.ERROR, SandboxState.BUILD_FAILED,
+                    SandboxState.STOPPED, SandboxState.ARCHIVED,  # Also skip stopped
+                )
+            ]
+            if usable:
+                # Reuse first available sandbox
+                existing = usable[0]
+                logger.info("Reusing existing sandbox %s (thread-agnostic for UX)", existing.id)
                 self._sandbox = existing
                 self._ensure_started()
             else:
-                logger.info("Creating new sandbox for thread %s", thread_id)
+                # No usable sandbox, create new one
+                logger.info("Creating new sandbox (no usable sandbox found)")
                 params = CreateSandboxFromSnapshotParams(
                     labels={"thread_id": thread_id},
                     auto_delete_interval=3600,
@@ -107,19 +123,21 @@ class SandboxManager:
                 self._sandbox = self._client.create(params)
                 self._ensure_started()
                 logger.info("New sandbox created: %s", self._sandbox.id)
+        except Exception as e:
+            logger.error("Failed to list/find existing sandbox: %s, creating new", e)
+            # Fallback: create new sandbox
+            params = CreateSandboxFromSnapshotParams(
+                labels={"thread_id": thread_id},
+                auto_delete_interval=3600,
+            )
+            self._sandbox = self._client.create(params)
+            self._ensure_started()
+            logger.info("New sandbox created (fallback): %s", self._sandbox.id)
         except (ConnectionError, TimeoutError, DaytonaTimeoutError) as e:
-            logger.warning("Daytona API error, retrying: %s", e)
-            try:
-                existing = self._find_existing(thread_id)
-                if existing:
-                    self._sandbox = existing
-                    self._ensure_started()
-                else:
-                    raise
-            except (ConnectionError, TimeoutError, DaytonaTimeoutError):
-                raise ConnectionError(
-                    f"Daytona unreachable after retry: {e}"
-                ) from e
+            logger.error("Daytona API error during sandbox creation: %s", e)
+            raise ConnectionError(
+                f"Daytona unreachable, cannot create sandbox: {e}"
+            ) from e
 
         self._backend = DaytonaSandbox(sandbox=self._sandbox, timeout=180)
 
