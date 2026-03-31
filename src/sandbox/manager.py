@@ -113,8 +113,14 @@ class SandboxManager:
                 logger.info("Reusing existing sandbox %s (thread-agnostic for UX)", existing.id)
                 self._sandbox = existing
                 self._ensure_started()
+
+                # Create backend and immediately signal ready (packages already installed)
+                self._backend = DaytonaSandbox(sandbox=self._sandbox, timeout=180)
+                self._packages_ready.set()  # Packages already there, no need to wait
+                logger.info("Reused sandbox ready immediately (packages pre-installed)")
+                return self._backend
             else:
-                # No usable sandbox, create new one
+                # No usable sandbox, create new one (packages will be installed)
                 logger.info("Creating new sandbox (no usable sandbox found)")
                 params = CreateSandboxFromSnapshotParams(
                     labels={"thread_id": thread_id},
@@ -123,9 +129,14 @@ class SandboxManager:
                 self._sandbox = self._client.create(params)
                 self._ensure_started()
                 logger.info("New sandbox created: %s", self._sandbox.id)
+        except (ConnectionError, TimeoutError, DaytonaTimeoutError) as e:
+            logger.error("Daytona API error: %s", e)
+            raise ConnectionError(
+                f"Daytona unreachable, cannot create sandbox: {e}"
+            ) from e
         except Exception as e:
-            logger.error("Failed to list/find existing sandbox: %s, creating new", e)
-            # Fallback: create new sandbox
+            # Generic error (e.g., list() failed) - fallback to creating new sandbox
+            logger.warning("Failed to list sandboxes: %s, creating new", e)
             params = CreateSandboxFromSnapshotParams(
                 labels={"thread_id": thread_id},
                 auto_delete_interval=3600,
@@ -133,11 +144,6 @@ class SandboxManager:
             self._sandbox = self._client.create(params)
             self._ensure_started()
             logger.info("New sandbox created (fallback): %s", self._sandbox.id)
-        except (ConnectionError, TimeoutError, DaytonaTimeoutError) as e:
-            logger.error("Daytona API error during sandbox creation: %s", e)
-            raise ConnectionError(
-                f"Daytona unreachable, cannot create sandbox: {e}"
-            ) from e
 
         self._backend = DaytonaSandbox(sandbox=self._sandbox, timeout=180)
 
