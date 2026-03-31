@@ -316,16 +316,12 @@ def render_chat():
             ):
                 _process_stream_chunk(chunk, rendered_ids)
 
-                # Collect tool calls + outputs for message history (skip already-seen messages)
+                # Collect tool calls + outputs for message history
+                # NOTE: No dedup here - we want ALL messages from current turn for persistence
                 if not isinstance(chunk, dict):
                     continue
                 for _node_name, node_output in chunk.items():
                     for msg in _safe_extract_messages(node_output):
-                        # Skip messages already rendered (same dedup logic as _process_stream_chunk)
-                        msg_id = getattr(msg, "id", None)
-                        if msg_id and msg_id in rendered_ids:
-                            continue  # Already processed in _process_stream_chunk
-
                         msg_type = getattr(msg, "type", None)
 
                         # AI message: collect tool calls (inputs)
