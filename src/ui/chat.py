@@ -132,16 +132,10 @@ def _process_stream_chunk(chunk, rendered_ids: set):
         for msg in messages:
             # Dedup: Skip messages already rendered (prevents old turns from replaying)
             msg_id = getattr(msg, "id", None)
-
-            # DEBUG: Log message ID info
-            logger.info(f"[UI] Processing message: type={getattr(msg, 'type', None)}, id={msg_id}, already_seen={msg_id in rendered_ids if msg_id else 'N/A'}")
-
             if msg_id and msg_id in rendered_ids:
-                logger.info(f"[UI] SKIPPED duplicate message ID: {msg_id}")
                 continue
             if msg_id:
                 rendered_ids.add(msg_id)
-                logger.info(f"[UI] Added message ID to rendered set: {msg_id}")
 
             msg_type = getattr(msg, "type", None)
 
