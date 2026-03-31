@@ -121,8 +121,15 @@ PARSERS = {
 }
 
 
-def make_parse_file_tool():
-    """Factory: create the parse_file tool with access to session state."""
+def make_parse_file_tool(uploaded_files: list | None = None):
+    """Factory: create the parse_file tool with access to uploaded files.
+
+    Args:
+        uploaded_files: List of uploaded file objects (from st.file_uploader).
+                       If None, falls back to st.session_state (for backwards compat).
+    """
+    # Capture uploaded_files in closure to avoid st.session_state access in agent thread
+    _files = uploaded_files if uploaded_files is not None else st.session_state.get("uploaded_files", [])
 
     @tool
     def parse_file(filename: str) -> str:
@@ -134,7 +141,8 @@ def make_parse_file_tool():
         Args:
             filename: Name of the uploaded file (e.g., "sales.xlsx")
         """
-        uploaded_files = st.session_state.get("uploaded_files", [])
+        # Use captured _files from closure (thread-safe, no st.session_state access)
+        uploaded_files = _files
         target = None
         for f in uploaded_files:
             if f.name == filename:

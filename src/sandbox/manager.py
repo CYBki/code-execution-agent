@@ -114,11 +114,32 @@ class SandboxManager:
                 self._sandbox = existing
                 self._ensure_started()
 
-                # Create backend and immediately signal ready (packages already installed)
+                # Create backend and verify packages are still installed
                 self._backend = DaytonaSandbox(sandbox=self._sandbox, timeout=180)
-                self._packages_ready.set()  # Packages already there, no need to wait
-                logger.info("Reused sandbox ready immediately (packages pre-installed)")
-                return self._backend
+
+                # CRITICAL FIX: Verify packages on reused sandbox (may have been lost on restart)
+                logger.info("Verifying packages on reused sandbox...")
+                try:
+                    verify = self._backend.execute(
+                        "python3 -c 'import weasyprint, pandas, openpyxl; print(\"VERIFY_OK\")' 2>&1",
+                        timeout=10
+                    )
+                    v_out = getattr(verify, 'output', '') or ''
+                    if "VERIFY_OK" in v_out:
+                        logger.info("Reused sandbox packages verified OK (instant ready)")
+                        self._packages_ready.set()
+                        return self._backend
+                    else:
+                        logger.warning("Reused sandbox packages missing: %s", v_out[:200])
+                        logger.info("Reinstalling packages synchronously (blocks until ready)...")
+                        # Packages missing, install them NOW in this thread
+                        self._install_packages()
+                        return self._backend
+                except Exception as e:
+                    logger.warning("Reused sandbox verify failed: %s, reinstalling...", e)
+                    # Verification failed, install packages now
+                    self._install_packages()
+                    return self._backend
             else:
                 # No usable sandbox, create new one (packages will be installed)
                 logger.info("Creating new sandbox (no usable sandbox found)")
@@ -271,12 +292,15 @@ class SandboxManager:
                 logger.info("_packages_ready event SET (verified)")
             else:
                 logger.error("Package verification FAILED: %s", v_out[:200])
-                # Don't set ready flag if verification fails
-                # Agent will get timeout warning from wait_until_ready()
+                # Fail-fast: set event to prevent 180s timeout, user gets immediate error
+                self._packages_ready.set()
+                logger.warning("_packages_ready event SET despite verification failure (fail-fast)")
 
         except Exception as e:
             logger.error("Package installation FAILED: %s", e, exc_info=True)
-            # Don't set ready flag on exception — let wait_until_ready() timeout
+            # Fail-fast: set event to prevent timeout, user gets immediate error
+            self._packages_ready.set()
+            logger.warning("_packages_ready event SET despite exception (fail-fast)")
 
     def wait_until_ready(self, timeout: float = 360) -> bool:
         """Block until packages are installed. Returns False on timeout."""
