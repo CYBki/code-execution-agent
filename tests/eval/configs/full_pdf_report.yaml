@@ -1,0 +1,18 @@
+name: full_pdf_report
+fixture: sales_50.xlsx
+queries:
+  - "Bu verileri analiz et ve detaylı bir PDF rapor üret."
+expected_keywords: ["rapor", "pdf"]
+expect_report: true
+rule_scorers:
+  - no_pickle
+  - persistent_kernel
+  - no_hardcoded_metrics
+  - no_shell_exploration
+  - report_generated
+  - execute_efficiency
+  - completeness
+llm_judges:
+  - correct_workflow_sequence
+  - no_unnecessary_reread
+  - report_quality

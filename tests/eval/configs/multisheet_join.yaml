@@ -1,0 +1,17 @@
+name: multisheet_join
+fixture: orders_customers.xlsx
+queries:
+  - "Bu dosyadaki siparişleri müşteri segmentlerine göre analiz et."
+expected_keywords: ["segment", "sipariş", "müşteri"]
+expect_report: false
+rule_scorers:
+  - no_pickle
+  - persistent_kernel
+  - no_shell_exploration
+  - validation_present
+  - execute_efficiency
+  - completeness
+llm_judges:
+  - correct_workflow_sequence
+  - no_unnecessary_reread
+  - appropriate_strategy

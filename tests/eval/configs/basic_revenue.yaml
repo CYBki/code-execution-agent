@@ -1,0 +1,16 @@
+name: basic_revenue_analysis
+fixture: sales_50.xlsx
+queries:
+  - "Bu dosyadaki toplam geliri ve en çok satan ürünü analiz et."
+expected_keywords: ["gelir", "ürün"]
+expect_report: false
+rule_scorers:
+  - no_pickle
+  - persistent_kernel
+  - no_shell_exploration
+  - validation_present
+  - execute_efficiency
+  - completeness
+llm_judges:
+  - correct_workflow_sequence
+  - no_unnecessary_reread

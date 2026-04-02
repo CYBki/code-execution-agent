@@ -1,0 +1,16 @@
+name: multi_turn_followup
+fixture: sales_50.xlsx
+queries:
+  - "Bu dosyadaki verilerin genel özetini çıkar."
+  - "Aylık gelir trendini göster."
+expected_keywords: ["trend", "aylık"]
+expect_report: false
+rule_scorers:
+  - no_pickle
+  - persistent_kernel
+  - no_shell_exploration
+  - execute_efficiency
+  - completeness
+llm_judges:
+  - correct_workflow_sequence
+  - no_unnecessary_reread
