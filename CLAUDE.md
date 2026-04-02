@@ -218,6 +218,8 @@ The [src/agent/prompts.py](src/agent/prompts.py) enforces:
 - [skills/xlsx/SKILL.md](skills/xlsx/SKILL.md) — Excel analysis rules, sheet detection, PDF format
 - [skills/xlsx/references/large_files.md](skills/xlsx/references/large_files.md) — DuckDB patterns for ≥40MB files
 - [skills/xlsx/references/multi_file_joins.md](skills/xlsx/references/multi_file_joins.md) — Multi-file JOIN patterns
+- [docs/REACT_VS_PLAN_EXECUTE.md](docs/REACT_VS_PLAN_EXECUTE.md) — ReAct vs Plan-and-Execute pattern evaluation (why ReAct is better for this project)
+- [docs/PATTERN_COMPARISON_SUMMARY.md](docs/PATTERN_COMPARISON_SUMMARY.md) — Quick comparison table and decision summary
 
 ## Security Constraints
 

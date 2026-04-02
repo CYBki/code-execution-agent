@@ -80,4 +80,4 @@ def render_sidebar():
         # Model info
         st.divider()
         st.caption("**Model:** Claude Sonnet 4")
-        st.caption("**Sandbox:** Daytona")
+        st.caption("**Sandbox:** OpenSandbox")

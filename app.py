@@ -1,4 +1,4 @@
-"""Streamlit entry point — Data Analysis Agent with LangChain + Daytona."""
+"""Streamlit entry point — Data Analysis Agent with LangChain + OpenSandbox."""
 
 import logging
 import os
@@ -36,14 +36,14 @@ st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 # Validate early so sandbox init doesn't start with missing credentials
 try:
     get_secret("ANTHROPIC_API_KEY")
-    get_secret("DAYTONA_API_KEY")
+    get_secret("OPEN_SANDBOX_API_KEY")
 except ValueError as e:
     st.error(f"⚠️ {e}")
     st.info(
         "API anahtarlarını `.env` dosyasına veya Streamlit secrets'a ekleyin.\n\n"
         "```\n"
         "ANTHROPIC_API_KEY=sk-ant-...\n"
-        "DAYTONA_API_KEY=your-daytona-api-key\n"
+        "OPEN_SANDBOX_API_KEY=local-sandbox-key-2024\n"
         "```"
     )
     st.stop()

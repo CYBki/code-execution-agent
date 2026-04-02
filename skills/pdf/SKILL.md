@@ -12,7 +12,7 @@ You are an expert at extracting and analyzing data from PDF documents.
 ```python
 import pdfplumber
 
-with pdfplumber.open('/home/daytona/document.pdf') as pdf:
+with pdfplumber.open('/home/sandbox/document.pdf') as pdf:
     print(f"Total pages: {len(pdf.pages)}")
 
     # Extract tables from first page
@@ -34,7 +34,7 @@ import pdfplumber
 import pandas as pd
 
 all_tables = []
-with pdfplumber.open('/home/daytona/document.pdf') as pdf:
+with pdfplumber.open('/home/sandbox/document.pdf') as pdf:
     for i, page in enumerate(pdf.pages):
         tables = page.extract_tables()
         for j, table in enumerate(tables):
@@ -71,7 +71,7 @@ tables = page.extract_tables(table_settings)
 ```python
 import pdfplumber
 
-with pdfplumber.open('/home/daytona/document.pdf') as pdf:
+with pdfplumber.open('/home/sandbox/document.pdf') as pdf:
     # Extract text from all pages
     full_text = ""
     for page in pdf.pages:
@@ -104,7 +104,7 @@ for page in pdf.pages[4:10]:
 ```python
 import pdfplumber
 
-with pdfplumber.open('/home/daytona/document.pdf') as pdf:
+with pdfplumber.open('/home/sandbox/document.pdf') as pdf:
     print(f"Pages: {len(pdf.pages)}")
     print(f"Metadata: {pdf.metadata}")
 
@@ -120,7 +120,7 @@ If pdfplumber returns empty text, the PDF likely contains scanned images:
 ```python
 import pdfplumber
 
-with pdfplumber.open('/home/daytona/scanned.pdf') as pdf:
+with pdfplumber.open('/home/sandbox/scanned.pdf') as pdf:
     page = pdf.pages[0]
     text = page.extract_text()
 
@@ -130,8 +130,8 @@ with pdfplumber.open('/home/daytona/scanned.pdf') as pdf:
         
         # Convert page to image for visual inspection
         im = page.to_image(resolution=150)
-        im.save('/home/daytona/page_preview.png')
-        print("Page preview saved to /home/daytona/page_preview.png")
+        im.save('/home/sandbox/page_preview.png')
+        print("Page preview saved to /home/sandbox/page_preview.png")
 ```
 
 ## Multi-Page Processing Pattern
@@ -170,7 +170,7 @@ def process_pdf(path):
     
     return results
 
-results = process_pdf('/home/daytona/document.pdf')
+results = process_pdf('/home/sandbox/document.pdf')
 print(f"Found {len(results['tables'])} tables across {results['page_count']} pages")
 ```
 

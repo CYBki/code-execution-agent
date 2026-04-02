@@ -170,10 +170,9 @@ def make_parse_file_tool(uploaded_files: list | None = None):
             output += "✅ PARSE BAŞARILI. SONRAKI ADIM:\n\n"
             output += "❌ YAPMA: ls, cat, os.listdir, parse_file tekrar çağırma\n"
             output += "✅ YAP:\n"
-            output += f"1. DÜŞÜNCE yaz: 'Schema alındı. Dosya /home/daytona/{filename}. Şimdi pd.read_excel ile okuyup pickle'a kaydedeceğim.'\n"
+            output += f"1. DÜŞÜNCE yaz: 'Schema alındı. Dosya /home/sandbox/{filename}. Şimdi pd.read_excel ile okuyacağım.'\n"
             output += "2. execute() çağır:\n"
-            output += f"   df = pd.read_excel('/home/daytona/{filename}')\n"
-            output += "   df.to_pickle('/home/daytona/data.pkl')\n"
+            output += f"   df = pd.read_excel('/home/sandbox/{filename}')\n"
             output += "   print(f'✅ {{len(df)}} satır yüklendi')\n"
             output += f"\n⚠️ SONRAKİ TOOL: execute (BAŞKA HİÇBİR TOOL ÇAĞIRMA!)\n"
             output += "{'='*70}"
@@ -183,8 +182,8 @@ def make_parse_file_tool(uploaded_files: list | None = None):
                     f"\n\n⚠️ BÜYÜK DOSYA ({size_mb:.1f} MB ≥ 40MB) — DUCKDB STRATEJİSİ ZORUNLU. "
                     "pandas ile pd.read_excel() KULLANMA (çok yavaş/bellek sorunu). "
                     "Doğru strateji: "
-                    "① df = pd.read_excel(path) ile CSV'ye çevir: df.to_csv('/home/daytona/temp.csv', index=False); del df "
-                    "② duckdb.sql(\"SELECT ... FROM read_csv_auto('/home/daytona/temp.csv')\").df() "
+                    "① df = pd.read_excel(path) ile CSV'ye çevir: df.to_csv('/home/sandbox/temp.csv', index=False); del df "
+                    "② duckdb.sql(\"SELECT ... FROM read_csv_auto('/home/sandbox/temp.csv')\").df() "
                     "Threshold: file_size_mb >= 40 → DuckDB, < 40 → pandas."
                 )
             return output

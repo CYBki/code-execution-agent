@@ -16,8 +16,8 @@ import duckdb
 
 # Step 1: Convert all Excel files to CSV
 print("Converting files to CSV...")
-pd.read_excel('/home/daytona/sales.xlsx').to_csv('/home/daytona/sales.csv', index=False)
-pd.read_excel('/home/daytona/products.xlsx').to_csv('/home/daytona/products.csv', index=False)
+pd.read_excel('/home/sandbox/sales.xlsx').to_csv('/home/sandbox/sales.csv', index=False)
+pd.read_excel('/home/sandbox/products.xlsx').to_csv('/home/sandbox/products.csv', index=False)
 print("Conversion complete")
 
 # Step 2: DuckDB JOIN query (memory-efficient)
@@ -28,8 +28,8 @@ result = duckdb.sql("""
         p.category,
         SUM(s.quantity) as total_sold,
         SUM(s.revenue) as total_revenue
-    FROM read_csv_auto('/home/daytona/sales.csv') s
-    JOIN read_csv_auto('/home/daytona/products.csv') p
+    FROM read_csv_auto('/home/sandbox/sales.csv') s
+    JOIN read_csv_auto('/home/sandbox/products.csv') p
         ON s.product_id = p.product_id
     GROUP BY s.date, p.product_name, p.category
     ORDER BY total_revenue DESC
@@ -45,8 +45,8 @@ print(result)
 ```python
 result = duckdb.sql("""
     SELECT s.*, p.product_name, p.category
-    FROM read_csv_auto('/home/daytona/sales.csv') s
-    JOIN read_csv_auto('/home/daytona/products.csv') p
+    FROM read_csv_auto('/home/sandbox/sales.csv') s
+    JOIN read_csv_auto('/home/sandbox/products.csv') p
         ON s.product_id = p.product_id
 """).df()
 ```
@@ -56,8 +56,8 @@ result = duckdb.sql("""
 ```python
 result = duckdb.sql("""
     SELECT s.*, p.product_name, p.category
-    FROM read_csv_auto('/home/daytona/sales.csv') s
-    LEFT JOIN read_csv_auto('/home/daytona/products.csv') p
+    FROM read_csv_auto('/home/sandbox/sales.csv') s
+    LEFT JOIN read_csv_auto('/home/sandbox/products.csv') p
         ON s.product_id = p.product_id
 """).df()
 
@@ -75,8 +75,8 @@ result = duckdb.sql("""
         COALESCE(s.product_id, p.product_id) as product_id,
         s.revenue,
         p.product_name
-    FROM read_csv_auto('/home/daytona/sales.csv') s
-    FULL OUTER JOIN read_csv_auto('/home/daytona/products.csv') p
+    FROM read_csv_auto('/home/sandbox/sales.csv') s
+    FULL OUTER JOIN read_csv_auto('/home/sandbox/products.csv') p
         ON s.product_id = p.product_id
 """).df()
 ```
@@ -92,8 +92,8 @@ result = duckdb.sql("""
     SELECT
         s.*,
         p.product_name  -- This is the "looked up" value
-    FROM read_csv_auto('/home/daytona/transactions.csv') s
-    LEFT JOIN read_csv_auto('/home/daytona/catalog.csv') p
+    FROM read_csv_auto('/home/sandbox/transactions.csv') s
+    LEFT JOIN read_csv_auto('/home/sandbox/catalog.csv') p
         ON s.product_id = p.product_id
 """).df()
 ```
@@ -107,10 +107,10 @@ import pandas as pd
 import os
 
 excel_files = [
-    '/home/daytona/sales_2023.xlsx',
-    '/home/daytona/sales_2024.xlsx',
-    '/home/daytona/products.xlsx',
-    '/home/daytona/regions.xlsx',
+    '/home/sandbox/sales_2023.xlsx',
+    '/home/sandbox/sales_2024.xlsx',
+    '/home/sandbox/products.xlsx',
+    '/home/sandbox/regions.xlsx',
 ]
 
 csv_files = {}
@@ -133,9 +133,9 @@ import duckdb
 # Stack yearly files + compare
 result = duckdb.sql("""
     WITH combined AS (
-        SELECT *, 2023 as year FROM read_csv_auto('/home/daytona/sales_2023.csv')
+        SELECT *, 2023 as year FROM read_csv_auto('/home/sandbox/sales_2023.csv')
         UNION ALL
-        SELECT *, 2024 as year FROM read_csv_auto('/home/daytona/sales_2024.csv')
+        SELECT *, 2024 as year FROM read_csv_auto('/home/sandbox/sales_2024.csv')
     )
     SELECT
         product_name,
@@ -158,11 +158,11 @@ Combine revenue from multiple regional files:
 ```python
 result = duckdb.sql("""
     WITH all_regions AS (
-        SELECT *, 'North' as region FROM read_csv_auto('/home/daytona/north.csv')
+        SELECT *, 'North' as region FROM read_csv_auto('/home/sandbox/north.csv')
         UNION ALL
-        SELECT *, 'South' as region FROM read_csv_auto('/home/daytona/south.csv')
+        SELECT *, 'South' as region FROM read_csv_auto('/home/sandbox/south.csv')
         UNION ALL
-        SELECT *, 'East' as region FROM read_csv_auto('/home/daytona/east.csv')
+        SELECT *, 'East' as region FROM read_csv_auto('/home/sandbox/east.csv')
     )
     SELECT
         region,
@@ -184,11 +184,11 @@ import duckdb
 
 # Check column names in both files
 cols_sales = duckdb.sql("""
-    SELECT column_name FROM (DESCRIBE SELECT * FROM read_csv_auto('/home/daytona/sales.csv'))
+    SELECT column_name FROM (DESCRIBE SELECT * FROM read_csv_auto('/home/sandbox/sales.csv'))
 """).df()
 
 cols_products = duckdb.sql("""
-    SELECT column_name FROM (DESCRIBE SELECT * FROM read_csv_auto('/home/daytona/products.csv'))
+    SELECT column_name FROM (DESCRIBE SELECT * FROM read_csv_auto('/home/sandbox/products.csv'))
 """).df()
 
 print("Sales columns:", list(cols_sales['column_name']))
@@ -213,9 +213,9 @@ for name, path in csv_files.items():
         print(f"Cleaned: {path}")
 
 # Also clean any temp_ prefixed files from large_files workflow
-for f in os.listdir('/home/daytona/'):
+for f in os.listdir('/home/sandbox/'):
     if f.startswith('temp_') and f.endswith('.csv'):
-        full = f'/home/daytona/{f}'
+        full = f'/home/sandbox/{f}'
         os.remove(full)
         print(f"Cleaned: {full}")
 ```

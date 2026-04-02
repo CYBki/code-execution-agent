@@ -7,35 +7,35 @@ description: "Use when working with .csv, .tsv files, comma-separated data, tab-
 
 You are an expert at working with CSV/TSV files efficiently.
 
-## Analiz İş Akışı
+## Analysis Workflow
 
 ```
-1. KEŞİF    → parse_file(dosya)  ← execute HARCAMAZ, her zaman İLK ADIM
-2. TEMİZLEME → execute(oku + temizle + df.to_pickle('/home/daytona/clean_data.pkl'))
-3. ANALİZ   → execute(pd.read_pickle + analiz + doğrulama)
-4. RAPOR    → execute(pickle + metrics dict + weasyprint PDF) → generate_html → download_file
+1. DISCOVERY  → parse_file(file)  ← does NOT consume execute budget, always FIRST STEP
+2. CLEANING   → execute(read + clean + print summary)
+3. ANALYSIS   → execute(df already in memory — analysis + validation)
+4. REPORT     → execute(metrics dict + weasyprint PDF) → generate_html → download_file
 ```
 
-## Pickle İş Akışı
+## Persistent Kernel — Variables Are Preserved
 
-CSV'yi her execute'da tekrar okuma — ilk execute'da pickle'a kaydet:
+The Python kernel is persistent: `df`, variables, and imports are preserved across execute calls.
 
 ```python
-# Execute 1: Oku + kaydet
-df = pd.read_csv('/home/daytona/data.csv')
-df.to_pickle('/home/daytona/clean_data.pkl')
-print(f'✅ Kaydedildi: {len(df):,} satır')
+# Execute 1: Read + clean
+df = pd.read_csv('/home/sandbox/data.csv')
+df = df.dropna(subset=['key_col'])
+print(f'✅ Loaded: {len(df):,} rows')
 
-# Execute 2+: Pickle'dan oku (10x daha hızlı)
-df = pd.read_pickle('/home/daytona/clean_data.pkl')
+# Execute 2+: df already in memory
+print(f'df still here: {len(df):,} rows')
 ```
 
-## Süreç Kuralları
+## Process Rules
 
-- Tüm veriyi işle — `.head(1000)` veya `nrows=50000` YASAK (schema için `nrows=5` hariç)
-- Her kritik metrik için: `assert not pd.isna(x) and x > 0` + print
-- Doğrulama analiz execute'unun SONUNA: `print('✅ Doğrulama OK')`
-- Script içinde try/except — ayrı execute YAPMA
+- Process ALL data — `.head(1000)` or `nrows=50000` FORBIDDEN (except `nrows=5` for schema)
+- For every critical metric: `assert not pd.isna(x) and x > 0` + print
+- Validation at the END of analysis execute: `print('✅ Validation OK')`
+- Use try/except inside the script — do NOT use a separate execute
 
 ## Basic CSV Reading
 
@@ -43,19 +43,19 @@ df = pd.read_pickle('/home/daytona/clean_data.pkl')
 import pandas as pd
 
 # Standard CSV
-df = pd.read_csv('/home/daytona/data.csv')
+df = pd.read_csv('/home/sandbox/data.csv')
 print(f"Shape: {df.shape}")
 print(df.head())
 
 # TSV (tab-separated)
-df = pd.read_csv('/home/daytona/data.tsv', sep='\t')
+df = pd.read_csv('/home/sandbox/data.tsv', sep='\t')
 
 # Custom separator
-df = pd.read_csv('/home/daytona/data.txt', sep='|')
+df = pd.read_csv('/home/sandbox/data.txt', sep='|')
 
 # Handle encoding issues
-df = pd.read_csv('/home/daytona/data.csv', encoding='utf-8-sig')  # BOM-aware
-df = pd.read_csv('/home/daytona/data.csv', encoding='latin-1')    # Western European
+df = pd.read_csv('/home/sandbox/data.csv', encoding='utf-8-sig')  # BOM-aware
+df = pd.read_csv('/home/sandbox/data.csv', encoding='latin-1')    # Western European
 ```
 
 ## File Size Detection
@@ -63,7 +63,7 @@ df = pd.read_csv('/home/daytona/data.csv', encoding='latin-1')    # Western Euro
 ```python
 import os
 
-file_path = '/home/daytona/data.csv'
+file_path = '/home/sandbox/data.csv'
 file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
 print(f"File size: {file_size_mb:.1f} MB")
 
@@ -86,7 +86,7 @@ result = duckdb.sql("""
         COUNT(*) as count,
         SUM(revenue) as total_revenue,
         AVG(revenue) as avg_revenue
-    FROM read_csv_auto('/home/daytona/data.csv')
+    FROM read_csv_auto('/home/sandbox/data.csv')
     GROUP BY category
     ORDER BY total_revenue DESC
 """).df()
@@ -100,7 +100,7 @@ print(result)
 import duckdb
 
 count = duckdb.sql("""
-    SELECT COUNT(*) FROM read_csv_auto('/home/daytona/data.csv')
+    SELECT COUNT(*) FROM read_csv_auto('/home/sandbox/data.csv')
 """).fetchone()[0]
 print(f"Total rows: {count:,}")
 ```
@@ -111,7 +111,7 @@ print(f"Total rows: {count:,}")
 import duckdb
 
 sample = duckdb.sql("""
-    SELECT * FROM read_csv_auto('/home/daytona/data.csv') LIMIT 100
+    SELECT * FROM read_csv_auto('/home/sandbox/data.csv') LIMIT 100
 """).df()
 print(sample.dtypes)
 print(sample.head())
@@ -123,38 +123,38 @@ print(sample.head())
 import pandas as pd
 
 # Skip rows, custom header
-df = pd.read_csv('/home/daytona/data.csv', skiprows=3, header=0)
+df = pd.read_csv('/home/sandbox/data.csv', skiprows=3, header=0)
 
 # No header — assign column names
-df = pd.read_csv('/home/daytona/data.csv', header=None, names=['A', 'B', 'C'])
+df = pd.read_csv('/home/sandbox/data.csv', header=None, names=['A', 'B', 'C'])
 
 # Parse dates during read
-df = pd.read_csv('/home/daytona/data.csv', parse_dates=['date', 'created_at'])
+df = pd.read_csv('/home/sandbox/data.csv', parse_dates=['date', 'created_at'])
 
 # Force column types
-df = pd.read_csv('/home/daytona/data.csv', dtype={'zip_code': str, 'id': str})
+df = pd.read_csv('/home/sandbox/data.csv', dtype={'zip_code': str, 'id': str})
 
 # Handle missing values
-df = pd.read_csv('/home/daytona/data.csv', na_values=['N/A', 'null', '-', ''])
+df = pd.read_csv('/home/sandbox/data.csv', na_values=['N/A', 'null', '-', ''])
 
 # Only read specific columns
-df = pd.read_csv('/home/daytona/data.csv', usecols=['name', 'revenue', 'date'])
+df = pd.read_csv('/home/sandbox/data.csv', usecols=['name', 'revenue', 'date'])
 
 # Read first N rows only (for preview)
-df = pd.read_csv('/home/daytona/data.csv', nrows=1000)
+df = pd.read_csv('/home/sandbox/data.csv', nrows=1000)
 ```
 
 ## Writing CSV
 
 ```python
 # Standard write
-df.to_csv('/home/daytona/output.csv', index=False)
+df.to_csv('/home/sandbox/output.csv', index=False)
 
 # Custom separator
-df.to_csv('/home/daytona/output.tsv', sep='\t', index=False)
+df.to_csv('/home/sandbox/output.tsv', sep='\t', index=False)
 
 # Excel-compatible (BOM for UTF-8)
-df.to_csv('/home/daytona/output.csv', index=False, encoding='utf-8-sig')
+df.to_csv('/home/sandbox/output.csv', index=False, encoding='utf-8-sig')
 ```
 
 ## Common Pitfalls

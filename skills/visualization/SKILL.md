@@ -24,9 +24,9 @@ You are an expert at creating clear, informative data visualizations.
 
 ## Static Charts (matplotlib / seaborn)
 
-Use `create_visualization` tool. Code MUST save to `/home/daytona/chart.png`.
+Use `create_visualization` tool. Code MUST save to `/home/sandbox/chart.png`.
 
-> **Not:** Aşağıdaki örneklerde `/home/daytona/data.csv` yer tutucu. Gerçek dosya adını `parse_file` çıktısından al.
+> **Note:** In the examples below, `/home/sandbox/data.csv` is a placeholder. Get the actual filename from the `parse_file` output.
 
 ### Bar Chart
 
@@ -34,8 +34,8 @@ Use `create_visualization` tool. Code MUST save to `/home/daytona/chart.png`.
 import matplotlib.pyplot as plt
 import pandas as pd
 
-# Dosya adını parse_file çıktısından al
-df = pd.read_csv('/home/daytona/data.csv')
+# Get actual filename from parse_file output
+df = pd.read_csv('/home/sandbox/data.csv')
 top10 = df.groupby('category')['revenue'].sum().nlargest(10)
 
 fig, ax = plt.subplots(figsize=(12, 6))
@@ -44,7 +44,7 @@ ax.set_xlabel('Total Revenue ($)')
 ax.set_title('Top 10 Categories by Revenue', fontweight='bold', fontsize=14)
 ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f'${x:,.0f}'))
 plt.tight_layout()
-plt.savefig('/home/daytona/chart.png', dpi=150, bbox_inches='tight')
+plt.savefig('/home/sandbox/chart.png', dpi=150, bbox_inches='tight')
 plt.close()
 ```
 
@@ -54,7 +54,7 @@ plt.close()
 import matplotlib.pyplot as plt
 import pandas as pd
 
-df = pd.read_csv('/home/daytona/data.csv', parse_dates=['date'])
+df = pd.read_csv('/home/sandbox/data.csv', parse_dates=['date'])
 monthly = df.set_index('date').resample('M')['revenue'].sum()
 
 fig, ax = plt.subplots(figsize=(12, 6))
@@ -65,7 +65,7 @@ ax.set_ylabel('Revenue ($)')
 ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f'${x:,.0f}'))
 ax.grid(True, alpha=0.3)
 plt.tight_layout()
-plt.savefig('/home/daytona/chart.png', dpi=150, bbox_inches='tight')
+plt.savefig('/home/sandbox/chart.png', dpi=150, bbox_inches='tight')
 plt.close()
 ```
 
@@ -75,7 +75,7 @@ plt.close()
 import matplotlib.pyplot as plt
 import pandas as pd
 
-df = pd.read_csv('/home/daytona/data.csv')
+df = pd.read_csv('/home/sandbox/data.csv')
 
 fig, ax = plt.subplots(figsize=(10, 6))
 ax.hist(df['revenue'], bins=30, color='#2563eb', edgecolor='white', alpha=0.8)
@@ -86,7 +86,7 @@ ax.set_xlabel('Revenue ($)')
 ax.set_ylabel('Frequency')
 ax.legend()
 plt.tight_layout()
-plt.savefig('/home/daytona/chart.png', dpi=150, bbox_inches='tight')
+plt.savefig('/home/sandbox/chart.png', dpi=150, bbox_inches='tight')
 plt.close()
 ```
 
@@ -97,7 +97,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
 
-df = pd.read_csv('/home/daytona/data.csv')
+df = pd.read_csv('/home/sandbox/data.csv')
 numeric_cols = df.select_dtypes(include='number')
 corr = numeric_cols.corr()
 
@@ -106,7 +106,7 @@ sns.heatmap(corr, annot=True, fmt='.2f', cmap='RdBu_r', center=0,
             square=True, linewidths=0.5, ax=ax)
 ax.set_title('Correlation Matrix', fontweight='bold', fontsize=14)
 plt.tight_layout()
-plt.savefig('/home/daytona/chart.png', dpi=150, bbox_inches='tight')
+plt.savefig('/home/sandbox/chart.png', dpi=150, bbox_inches='tight')
 plt.close()
 ```
 
@@ -116,7 +116,7 @@ plt.close()
 import matplotlib.pyplot as plt
 import pandas as pd
 
-df = pd.read_csv('/home/daytona/data.csv')
+df = pd.read_csv('/home/sandbox/data.csv')
 
 fig, ax = plt.subplots(figsize=(10, 8))
 scatter = ax.scatter(df['x'], df['y'], c=df['category'].astype('category').cat.codes,
@@ -126,7 +126,7 @@ ax.set_ylabel('Y Variable')
 ax.set_title('X vs Y by Category', fontweight='bold', fontsize=14)
 plt.colorbar(scatter, ax=ax, label='Category')
 plt.tight_layout()
-plt.savefig('/home/daytona/chart.png', dpi=150, bbox_inches='tight')
+plt.savefig('/home/sandbox/chart.png', dpi=150, bbox_inches='tight')
 plt.close()
 ```
 

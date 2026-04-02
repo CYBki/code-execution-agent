@@ -1,4 +1,4 @@
-"""Download file tool — fetch a file from Daytona sandbox and offer as Streamlit download."""
+"""Download file tool — fetch a file from OpenSandbox and offer as Streamlit download."""
 
 from __future__ import annotations
 
@@ -6,15 +6,15 @@ import logging
 import os
 
 from langchain_core.tools import tool
-from langchain_daytona import DaytonaSandbox
+from src.sandbox.manager import OpenSandboxBackend, SANDBOX_HOME
 
 from src.tools.artifact_store import get_store
 
 logger = logging.getLogger(__name__)
 
 
-def make_download_file_tool(backend: DaytonaSandbox, session_id: str = ""):
-    """Factory: create the download_file tool bound to a Daytona backend."""
+def make_download_file_tool(backend: OpenSandboxBackend, session_id: str = ""):
+    """Factory: create the download_file tool bound to an OpenSandbox backend."""
 
     @tool
     def download_file(file_path: str) -> str:
@@ -24,9 +24,9 @@ def make_download_file_tool(backend: DaytonaSandbox, session_id: str = ""):
         in the sandbox. The file will appear as a download button in the chat.
 
         Args:
-            file_path: Absolute path to the file in the sandbox, e.g. '/home/daytona/report.pdf'
+            file_path: Absolute path to the file in the sandbox, e.g. '/home/sandbox/report.pdf'
         """
-        ALLOWED_PREFIX = "/home/daytona/"
+        ALLOWED_PREFIX = SANDBOX_HOME + "/"
         if not file_path.startswith(ALLOWED_PREFIX):
             return f"❌ Only files under {ALLOWED_PREFIX} can be downloaded."
 

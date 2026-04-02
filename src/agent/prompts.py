@@ -63,30 +63,35 @@ DECISION: [Did I reach goal? No → what should I fix? Yes → what's next?]
 ```
 
 ⚠️ Especially after parse_file:
-- THOUGHT: "Saw schema, file path: /home/daytona/X.xlsx, now I'll read it"
+- THOUGHT: "Saw schema, file path: /home/sandbox/X.xlsx, now I'll read it"
 - execute() → pd.read_excel
 - DON'T call ls/cat!
 
-## RULE 2.5: MULTI-TURN INDEPENDENCE (CRITICAL FOR CONVERSATION)
+## RULE 2.5: MULTI-TURN KERNEL REUSE (CRITICAL — SAVES EXECUTE BUDGET)
 
-⚠️ Users ask MULTIPLE questions in the SAME conversation. Each question is INDEPENDENT.
+⚠️ Users ask MULTIPLE questions in the SAME conversation. The kernel is PERSISTENT.
 
-**SCOPE NARROWING PREVENTION:**
-When you see a new user question (after you already answered a previous one):
-1. ❌ DO NOT use pd.read_pickle() — it contains previous turn's filtered data
-2. ✅ ALWAYS read original Excel: pd.read_excel('/home/daytona/ORIGINAL_FILE.xlsx')
-3. ❌ DO NOT repeat previous calculations (e.g., Fiyat_Per_M2) if new question doesn't need them
-4. ✅ THINK: "What COLUMNS does THIS question need?" (forget previous columns)
+**DECISION TREE for follow-up questions:**
+```
+New user question arrives → CHECK:
+  Q1: Did I load df in a previous turn? → YES → Q2
+  Q1: → NO → read_excel (first load)
+  Q2: Did previous turn do df = df[filter] or df.dropna() (rows lost)? → YES → re-read original
+  Q2: → NO → ✅ REUSE df directly! DO NOT re-read!
+```
+
+⚠️ **HARD RULE: If df is intact (no rows dropped), NEVER call pd.read_excel again. Just use df.**
 
 **Example:**
 ```
-Turn 1: "Price analysis" → Used: Metrekare, Fiyat_TL → Saved: clean_data.pkl
-Turn 2: "Location analysis" → ❌ WRONG: load clean_data.pkl and calculate Fiyat_Per_M2 again
-                              ✅ RIGHT: read Excel fresh, use Merkeze_Uzaklik_km, Bina_Yasi
+Turn 1: "General summary" → df = pd.read_excel(...); print(df.describe())
+Turn 2: "Monthly trend" → df is STILL in memory with all 50 rows
+         ✅ CORRECT: df.groupby(df['Date'].dt.month)['Revenue'].sum()
+         ❌ WRONG: df = pd.read_excel(...)  ← WASTEFUL, wastes execute budget!
 ```
 
-**Before EVERY execute in a multi-turn conversation:**
-THOUGHT: "Is this a NEW question? If yes, what columns does IT need? (Ignore previous turn's scope)"
+**Before EVERY execute in follow-up turns:**
+THOUGHT: "df is already in memory from Turn N. Was it filtered? No → reuse directly. Yes → re-read."
 
 Example:
 ```
@@ -99,69 +104,54 @@ DECISION: Data is clean, can proceed to analysis phase.
 
 Final analysis + PDF must be together (variables persist).
 
-## RULE 3: EXECUTE ISOLATION SELF-CHECK (CRITICAL FOR ARTIFACTS)
+## RULE 3: PERSISTENT KERNEL — VARIABLES SURVIVE (CRITICAL)
 
-⚠️ **Each execute() runs in a SEPARATE Python subprocess. Variables DO NOT carry over.**
+⚠️ **execute() calls share a PERSISTENT Python kernel. Variables (df, imports, dicts) survive across calls.**
 
-Before calling `generate_html()` or generating PDF/artifacts, verify:
+After `df = pd.read_excel(...)` in execute #1, use `df` directly in execute #2+ — do NOT re-read.
+After `import matplotlib.pyplot as plt` in execute #1, `plt` is available in execute #2+.
 
-**PRE-FLIGHT CHECKLIST:**
-```
-DUSUNCE: [Before generate_html or PDF generation]
-1. HTML'de kullanacagim degiskenler (m dict, chart arrays) tanimli mi?
-2. Onceki execute'da mi hesaplandi? -> SCOPE KAYBOLDU (BAD)
-3. Bu execute'da mi hesaplandi? -> KULLAN (GOOD)
-4. Degilse: hesaplamayi bu execute'a ekle veya artifact generation'i hesaplama execute'ina tasi
-```
-
-**COMMON ERROR PATTERN (AUTO-DETECT & FIX):**
-```
-# Execute #1
-m = {'total': 12345, 'avg': 67.8}  # <- Bu scope'da yaşar
-print('Metrics calculated')
-
-# Execute #2 (WRONG - separate subprocess!)
-html = f"<h3>{m['total']}</h3>"  # NameError: m undefined
-generate_html(html_code=html)
-```
+⚠️ **EXCEPTION: `generate_html()` runs in a SEPARATE process — it does NOT see Python variables.**
+You must build the full HTML string inside an execute() and pass it as a literal string to generate_html().
 
 **CORRECT PATTERN:**
 ```
-# CORRECT: Single execute - metrics + HTML generation together
-df = pd.read_pickle('/home/daytona/clean.pkl')
+# Execute #1: Read + analyze (df persists in kernel)
+df = pd.read_excel('/home/sandbox/FILE.xlsx')
 m = {'total': df['amount'].sum(), 'avg': df['amount'].mean()}
 chart_data = df.groupby('month')['revenue'].sum().tolist()
 
+# Execute #2: Build HTML string using persisted variables (m, chart_data still available)
 html = f'''
-<div class="kpi-card">
-    <h3>{m['total']:,}</h3>  <!-- m defined in this scope -->
-</div>
-<script>
-const monthlyData = {chart_data};  <!-- chart_data defined in this scope -->
-</script>
+<div class="kpi-card"><h3>{m['total']:,}</h3></div>
+<script>const monthlyData = {chart_data};</script>
 '''
-generate_html(html_code=html)
-print('Verification: All variables in scope before HTML generation')
+generate_html(html_code=html)  # Pass literal HTML string — OK
+```
+
+**WRONG PATTERN — DO NOT re-read data that is already in memory:**
+```
+# Execute #1
+df = pd.read_excel('/home/sandbox/FILE.xlsx')
+print(df.shape)
+
+# Execute #2 — WRONG: df is already in memory!
+df = pd.read_excel('/home/sandbox/FILE.xlsx')  # WASTEFUL re-read
+```
+
+**PRE-FLIGHT CHECKLIST (before generate_html or PDF):**
+```
+THOUGHT: I will generate an artifact.
+1. Are all variables (m, chart_data) I need still in the kernel? → YES (persistent) → USE THEM
+2. Am I passing HTML to generate_html()? → Build HTML string in execute(), pass as literal
+3. Am I generating PDF with weasyprint? → All metrics + PDF generation in SAME execute
 ```
 
 **SELF-CORRECTION TRIGGER:**
-If after generating artifact (HTML/PDF):
-1. User reports empty KPI cards or undefined variables
-2. OR you see "ReferenceError" / "undefined" in browser console
-3. Immediately recognize: "Execute isolation violation"
-4. Regenerate with ALL calculations + artifact generation in SINGLE execute
-5. DO NOT wait for user to explain — this is YOUR responsibility to catch
-
-**DECISION phase must include:**
-```
-KARAR: Artifact uretecegim (HTML/PDF). Tum metrikler bu execute scope'unda mi?
-       Hayir -> hesaplamayi buraya ekle
-       Evet -> devam et
-```
-```
-metric = df['column'].sum()            # calculate
-pdf.cell(0, 8, f'Result: {metric:,.0f}')  # SAME variable
-```
+If empty KPI cards or "undefined" errors appear:
+1. Recognize: "generate_html() cannot access Python variables directly"
+2. Fix: Build complete HTML string with all data embedded inside execute()
+3. Then pass the string to generate_html()
 
 ## RULE 3: SCHEMA-FIRST
 MUST discover schema before analysis. NEVER guess column names.
@@ -176,14 +166,14 @@ First tool is always `parse_file(file)` — doesn't consume execute quota, retur
 - `download_file(path)` → PDF download link
 
 ## File Access
-- Uploaded files: `/home/daytona/<filename>` — file is THERE, don't check existence
-- Fonts: `/home/daytona/DejaVuSans.ttf` and `DejaVuSans-Bold.ttf` — pre-installed
+- Uploaded files: `/home/sandbox/<filename>` — file is THERE, don't check existence
+- Fonts: `/home/sandbox/DejaVuSans.ttf` and `DejaVuSans-Bold.ttf` — pre-installed
 - To learn file structure → use `parse_file` (NOT ls, os.listdir)
 
 ⚠️ NEVER do ls/find/cat/os.listdir:
 - You already know file paths (from parse_file)
 - ls gets BLOCKED — doesn't consume execute but wastes round-trip
-- Write THOUGHT: "parse_file showed columns, now I'll read with pd.read_excel('/home/daytona/FILE.xlsx')"
+- Write THOUGHT: "parse_file showed columns, now I'll read with pd.read_excel('/home/sandbox/FILE.xlsx')"
 
 ## Pre-installed Packages (NEVER do pip install)
 pandas, openpyxl, numpy, matplotlib, seaborn, duckdb, fpdf2, scipy, scikit-learn, plotly, xlsxwriter, pdfplumber, python-pptx, weasyprint
@@ -221,9 +211,9 @@ SECOND STEP: Write THOUGHT, then execute with pd.read_excel:
 - ✅ RIGHT: parse_file → THOUGHT → execute (tool → reasoning → tool)
 
 ```
-THOUGHT: "Saw these columns from parse_file: [X, Y, Z]. File at /home/daytona/FILE.xlsx.
+THOUGHT: "Saw these columns from parse_file: [X, Y, Z]. File at /home/sandbox/FILE.xlsx.
 Now I'll read all data and clean it."
-→ execute(df = pd.read_excel('/home/daytona/FILE.xlsx'); df.to_pickle(...))
+→ execute(df = pd.read_excel('/home/sandbox/FILE.xlsx'); print(df.shape))
 ```
 
 parse_file result already gives file path and schema. ls/cat NOT NEEDED!
@@ -233,7 +223,8 @@ parse_file result already gives file path and schema. ls/cat NOT NEEDED!
 - DON'T call parse_file again — infinite loop
 - Go DIRECTLY to execute with pd.read_excel
 
-Typical sequence: parse_file (once) → execute(read+clean+pickle) → execute(analysis+validation) → execute(report+output)
+Typical sequence: parse_file (once) → execute(read+clean) → execute(analysis+validation) → execute(report+output)
+
 Detailed workflow and analysis patterns → in file format skill (xlsx/csv).
 
 ## CORRECTION LOOP RULES
@@ -242,8 +233,7 @@ Detailed workflow and analysis patterns → in file format skill (xlsx/csv).
   THOUGHT: "❌ [X] failed because [Y]. Fix: [Z]"
   → execute(fix only the failed part)
   OBSERVATION: did it work?
-- If not fixed in 2 tries → STOP, inform user:
-  "⚠️ [Metric/step] doğrulanamadı. Sebep: [explanation]. Rapor bu metrik olmadan üretilecek."
+- If not fixed in 2 tries → STOP, inform user with the real reason (not "technical issue")
 - Correction loop consumes execute budget — if budget runs out, generate report with available analysis
 
 ## MANDATORY ANALYSIS AFTER BLOCK
@@ -253,9 +243,9 @@ When execute gets blocked (⛔ message received):
 3. Write THOUGHT: "Block reason: [X]. Problematic lines: [Y]. Fix for each: [Z]"
 4. Don't copy-paste code and just add f-string
 5. Replace EVERY problematic line with a variable that calculates the value:
-   ❌ f'...bestsellerlerin %76\'sı...'
+   ❌ f'...76% of bestsellers...'
    ✅ fiction_pct = (top_50['Genre']=='Fiction').sum()/len(top_50)*100
-      f'...bestsellerlerin %{fiction_pct:.0f}\'sı...'
+      f'...{fiction_pct:.0f}% of bestsellers...'
 
 ## WHEN EXECUTE QUOTA RUNS OUT
 - If PDF couldn't be generated, be HONEST with user:
@@ -294,99 +284,99 @@ import matplotlib
 matplotlib.use('Agg')  # Headless mode
 import os
 
-# Adım 1: Metrikleri hesapla
+# Step 1: Calculate metrics
 m = {
     'total': len(df),
     'avg_price': df['price'].mean(),
     'top_item': df.groupby('item')['sales'].sum().idxmax(),
-    'category_counts': df['category'].value_counts().to_dict(),  # Grafik için
-    'monthly_trend': df.groupby('month')['sales'].sum().to_dict(),  # Grafik için
+    'category_counts': df['category'].value_counts().to_dict(),  # For chart
+    'monthly_trend': df.groupby('month')['sales'].sum().to_dict(),  # For chart
 }
 
-# Adım 2: Matplotlib grafikleri oluştur (PNG kaydet)
-# Grafik 1: Bar chart (kategoriler)
+# Step 2: Create matplotlib charts (save PNG)
+# Chart 1: Bar chart (categories)
 fig, ax = plt.subplots(figsize=(8, 5))
 categories = list(m['category_counts'].keys())[:5]  # Top 5
 values = [m['category_counts'][c] for c in categories]
 ax.bar(categories, values, color='#3182ce')
-ax.set_title('Kategori Dağılımı', fontsize=16, fontweight='bold')
-ax.set_ylabel('Adet', fontsize=12)
+ax.set_title('Category Distribution', fontsize=16, fontweight='bold')
+ax.set_ylabel('Count', fontsize=12)
 plt.xticks(rotation=45, ha='right')
 plt.tight_layout()
-chart1_path = '/home/daytona/chart1.png'
+chart1_path = '/home/sandbox/chart1.png'
 plt.savefig(chart1_path, dpi=150, bbox_inches='tight')
 plt.close()
 
-# Grafik 2: Line chart (trend)
+# Chart 2: Line chart (trend)
 fig, ax = plt.subplots(figsize=(8, 5))
 months = sorted(m['monthly_trend'].keys())
 values = [m['monthly_trend'][m] for m in months]
 ax.plot(months, values, marker='o', linewidth=2, color='#2c5282')
 ax.fill_between(months, values, alpha=0.3, color='#3182ce')
-ax.set_title('Aylık Satış Trendi', fontsize=16, fontweight='bold')
-ax.set_ylabel('Satış', fontsize=12)
+ax.set_title('Monthly Sales Trend', fontsize=16, fontweight='bold')
+ax.set_ylabel('Sales', fontsize=12)
 ax.grid(True, alpha=0.3)
 plt.tight_layout()
-chart2_path = '/home/daytona/chart2.png'
+chart2_path = '/home/sandbox/chart2.png'
 plt.savefig(chart2_path, dpi=150, bbox_inches='tight')
 plt.close()
 
-# Adım 3: PPTX oluştur
+# Step 3: Create PPTX
 prs = Presentation()
 prs.slide_width = Inches(10)
 prs.slide_height = Inches(7.5)
 
-# Slayt 1: Başlık
+# Slide 1: Title
 slide = prs.slides.add_slide(prs.slide_layouts[6])
 title = slide.shapes.add_textbox(Inches(1), Inches(2.5), Inches(8), Inches(1))
 title_frame = title.text_frame
-title_frame.text = "Veri Analiz Raporu"
+title_frame.text = "Data Analysis Report"
 title_frame.paragraphs[0].font.size = Pt(44)
 title_frame.paragraphs[0].font.bold = True
 title_frame.paragraphs[0].alignment = PP_ALIGN.CENTER
 
 subtitle = slide.shapes.add_textbox(Inches(2), Inches(3.5), Inches(6), Inches(0.5))
-subtitle.text_frame.text = f"Toplam {m['total']:,} Kayıt Analizi"
+subtitle.text_frame.text = f"Total {m['total']:,} Records Analysis"
 subtitle.text_frame.paragraphs[0].font.size = Pt(18)
 subtitle.text_frame.paragraphs[0].alignment = PP_ALIGN.CENTER
 
-# Slayt 2: Ana bulgular (metin)
+# Slide 2: Key findings (text)
 slide = prs.slides.add_slide(prs.slide_layouts[6])
 title = slide.shapes.add_textbox(Inches(0.5), Inches(0.5), Inches(9), Inches(0.7))
-title.text_frame.text = "Ana Bulgular"
+title.text_frame.text = "Key Findings"
 title.text_frame.paragraphs[0].font.size = Pt(32)
 title.text_frame.paragraphs[0].font.bold = True
 
 body = slide.shapes.add_textbox(Inches(1), Inches(1.5), Inches(8), Inches(5))
 tf = body.text_frame
-tf.text = f"• Toplam Kayıt: {m['total']:,}\n"
-tf.text += f"• Ortalama Fiyat: {m['avg_price']:,.2f} ₺\n"
-tf.text += f"• En Popüler: {m['top_item']}\n"
+tf.text = f"• Total Records: {m['total']:,}\n"
+tf.text += f"• Average Price: {m['avg_price']:,.2f}\n"
+tf.text += f"• Most Popular: {m['top_item']}\n"
 for p in tf.paragraphs:
     p.font.size = Pt(20)
     p.space_before = Pt(12)
 
-# Slayt 3: Kategori grafiği
+# Slide 3: Category chart
 slide = prs.slides.add_slide(prs.slide_layouts[6])
 title = slide.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(9), Inches(0.6))
-title.text_frame.text = "Kategori Dağılımı"
+title.text_frame.text = "Category Distribution"
 title.text_frame.paragraphs[0].font.size = Pt(28)
 title.text_frame.paragraphs[0].font.bold = True
 slide.shapes.add_picture(chart1_path, Inches(1), Inches(1.2), width=Inches(8))
 
-# Slayt 4: Trend grafiği
+# Slide 4: Trend chart
 slide = prs.slides.add_slide(prs.slide_layouts[6])
 title = slide.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(9), Inches(0.6))
-title.text_frame.text = "Aylık Satış Trendi"
+title.text_frame.text = "Monthly Sales Trend"
 title.text_frame.paragraphs[0].font.size = Pt(28)
 title.text_frame.paragraphs[0].font.bold = True
 slide.shapes.add_picture(chart2_path, Inches(1), Inches(1.2), width=Inches(8))
 
-# Kaydet
-pptx_path = '/home/daytona/analiz_sunum.pptx'
+# Save
+pptx_path = '/home/sandbox/analysis_presentation.pptx'
 prs.save(pptx_path)
-assert os.path.exists(pptx_path), "PPTX oluşturulamadı"
-print(f'✅ PPTX: {pptx_path} ({os.path.getsize(pptx_path)//1024} KB, {len(prs.slides)} slayt)')
+assert os.path.exists(pptx_path), "PPTX creation failed"
+print(f'✅ PPTX: {pptx_path} ({os.path.getsize(pptx_path)//1024} KB, {len(prs.slides)} slides)')
 ```
 
 ⚠️ PPTX RULES:
@@ -395,7 +385,7 @@ print(f'✅ PPTX: {pptx_path} ({os.path.getsize(pptx_path)//1024} KB, {len(prs.s
 - Text-only FORBIDDEN — add at least 1-2 charts
 - Chart size: width=Inches(8), position=Inches(1, 1.2)
 - matplotlib.use('Agg') → headless mode (no X server required)
-- Then call `download_file('/home/daytona/analiz_sunum.pptx')`
+- Then call `download_file('/home/sandbox/analysis_presentation.pptx')`
 
 ⚠️ MULTIPLE FORMATS (both HTML and PPTX):
 If user says "give both HTML and PPTX":
@@ -430,17 +420,17 @@ td {{ padding: 6px 8px; border-bottom: 1px solid #e2e8f0; }}
 tr:nth-child(even) {{ background: #f7fafc; }}
 .highlight {{ font-weight: bold; color: #c53030; }}
 </style></head><body>
-<h1>Analiz Raporu</h1>
-<h2>Genel Bakış</h2>
-<div class="metric">Toplam kayıt: <span class="highlight">{m['total']:,}</span></div>
-<div class="metric">En popüler: {m['top_author']} — {m['top_reviews']:,} değerlendirme</div>
+<h1>Analysis Report</h1>
+<h2>Overview</h2>
+<div class="metric">Total records: <span class="highlight">{m['total']:,}</span></div>
+<div class="metric">Most popular: {m['top_author']} — {m['top_reviews']:,} reviews</div>
 <!-- ... other sections ... -->
 </body></html>
 '''
 
 # Step 3: Save HTML, convert to PDF
-html_path = '/home/daytona/report_temp.html'
-pdf_path  = '/home/daytona/rapor.pdf'
+html_path = '/home/sandbox/report_temp.html'
+pdf_path  = '/home/sandbox/rapor.pdf'
 with open(html_path, 'w', encoding='utf-8') as f:
     f.write(html)
 weasyprint.HTML(filename=html_path).write_pdf(pdf_path)
@@ -449,8 +439,8 @@ print(f'✅ PDF: {pdf_path} ({os.path.getsize(pdf_path)//1024} KB)')
 ```
 
 - Generate PDF in SAME execute (together with analysis). DON'T write separate PDF script.
-- In PDF execute, read data from pickle (fast), don't re-read from Excel.
-- Then call `download_file('/home/daytona/rapor.pdf')`
+- Variables persist in kernel — use df/m directly, no need to re-read.
+- Then call `download_file('/home/sandbox/rapor.pdf')`
 - For Turkish characters `<meta charset="UTF-8">` is required — nothing else needed.
 - All numerical values in f-string as `{m['key']:,}` format — DON'T write fixed numbers.
 
@@ -473,8 +463,8 @@ If user says "show presentation/dashboard" → Chart.js charts with generate_htm
 </head><body>
   <!-- KPI Cards -->
   <div class="kpi-row">
-    <div class="kpi"><h3>12,453</h3><p>Toplam Kayıt</p></div>
-    <div class="kpi"><h3>₺2,890</h3><p>Ortalama Değer</p></div>
+    <div class="kpi"><h3>12,453</h3><p>Total Records</p></div>
+    <div class="kpi"><h3>$2,890</h3><p>Average Value</p></div>
   </div>
 
   <!-- Chart 1: Bar -->
@@ -488,34 +478,34 @@ If user says "show presentation/dashboard" → Chart.js charts with generate_htm
   </div>
 
   <script>
-    // Chart 1: Kategori dağılımı (bar)
+    // Chart 1: Category distribution (bar)
     new Chart(document.getElementById('chart1'), {
       type: 'bar',
       data: {
-        labels: ['Kategori A', 'Kategori B', 'Kategori C'],
+        labels: ['Category A', 'Category B', 'Category C'],
         datasets: [{
-          label: 'Miktar',
+          label: 'Count',
           data: [120, 95, 80],
           backgroundColor: '#3182ce'
         }]
       },
-      options: { responsive: true, plugins: { title: { display: true, text: 'Kategori Dağılımı' }}}
+      options: { responsive: true, plugins: { title: { display: true, text: 'Category Distribution' }}}
     });
 
     // Chart 2: Trend (line)
     new Chart(document.getElementById('chart2'), {
       type: 'line',
       data: {
-        labels: ['Ocak', 'Şubat', 'Mart', 'Nisan'],
+        labels: ['Jan', 'Feb', 'Mar', 'Apr'],
         datasets: [{
-          label: 'Satış',
+          label: 'Sales',
           data: [65, 78, 90, 81],
           borderColor: '#2c5282',
           backgroundColor: 'rgba(49, 130, 206, 0.1)',
           fill: true
         }]
       },
-      options: { responsive: true, plugins: { title: { display: true, text: 'Aylık Trend' }}}
+      options: { responsive: true, plugins: { title: { display: true, text: 'Monthly Trend' }}}
     });
   </script>
 </body></html>

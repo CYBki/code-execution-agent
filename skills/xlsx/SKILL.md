@@ -7,229 +7,214 @@ description: "Use when working with .xlsx, .xls, Excel files, spreadsheets, work
 
 You are an expert Excel analyst. Follow these instructions precisely when working with Excel files.
 
-## Analiz İş Akışı (ReAct Döngüsü)
+## Analysis Workflow (ReAct Loop)
 
-Sabit faz sırası yok — kullanıcı sorgusuna göre adapte et. Tipik sıra:
+No fixed phase order — adapt to the user's query. Typical sequence:
 
 ```
-1. KEŞİF
-   DÜŞÜNCE: "Dosya yüklendi, yapısını anlamalıyım. ls/os.listdir DEĞİL, parse_file."
-   → parse_file(dosya)   ← execute HARCAMAZ, her zaman İLK ADIM
-   GÖZLEM: [kolonlar, tipler, preview, satır sayısı]
-   KARAR: Schema gördüm → temizle + pickle'a kaydet.
+1. DISCOVERY
+   THOUGHT: "File uploaded, I need to understand its structure. NOT ls/os.listdir — use parse_file."
+   → parse_file(file)   ← does NOT consume execute budget, always FIRST STEP
+   OBSERVATION: [columns, types, preview, row count]
+   DECISION: Schema seen → clean.
 
-2. TEMİZLEME + PICKLE
-   DÜŞÜNCE: [Hangi kolonlar lazım, null durumu, tip dönüşümleri]
-   → execute(oku + temizle + df.to_pickle('/home/daytona/clean_data.pkl'))
-   GÖZLEM: [satır sayısı, temizleme özeti, ✅ Doğrulama OK]
-   KARAR: Temiz mi? Evet → analiz. Hayır → DÜZELTME DÖNGÜSÜ.
+2. CLEANING
+   THOUGHT: [Which columns needed, null status, type conversions]
+   → execute(read + clean + print summary)
+   OBSERVATION: [row count, cleaning summary, ✅ Validation OK]
+   DECISION: Clean? Yes → analyze. No → CORRECTION LOOP.
 
-3. ANALİZ (pickle'dan oku — Excel'den tekrar okuma)
-   DÜŞÜNCE: [Kullanıcı ne soruyor, hangi hesaplamalar gerekli]
-   → execute(pd.read_pickle + analiz + doğrulama bloğu)
-   GÖZLEM: [sonuçlar + ✅ Doğrulama OK]
-   KARAR: Doğrulama geçti mi? Evet → rapora geç. Hayır → DÜZELTME DÖNGÜSÜ.
+3. ANALYSIS (df already in memory — no re-read from Excel)
+   THOUGHT: [What is the user asking, which calculations needed]
+   → execute(use df + analysis + validation block)
+   OBSERVATION: [results + ✅ Validation OK]
+   DECISION: Validation passed? Yes → move to report. No → CORRECTION LOOP.
 
-4. RAPOR (analiz + PDF tek script)
-   DÜŞÜNCE: [Hangi metrikleri rapora koyacağım]
-   → execute(pickle'dan oku + metrics dict + weasyprint PDF + doğrula)
+4. REPORT (analysis + PDF in single script)
+   THOUGHT: [Which metrics to include in report]
+   → execute(compute from df + metrics dict + weasyprint PDF + validate)
    → generate_html(dashboard)
    → download_file(PDF)
-   → Kullanıcıya KISA özet (genel bulgular — spesifik sayı/oran KULLANMA)
+   → Give user a SHORT summary (general findings — do NOT repeat specific numbers)
 ```
 
-## Pickle İş Akışı
+## Persistent Kernel — Variables Are Preserved
 
-Excel/CSV dosyalarını her execute'da tekrar okuma — çok yavaş. İlk execute'da kaydet:
+The Python kernel is persistent: `df`, variables, and imports are preserved across execute calls.
 
 ```python
-# Execute 1: Oku + temizle + kaydet
-df = pd.read_excel('/home/daytona/dosya.xlsx')
+# Execute 1: Read + clean (df stays in memory)
+df = pd.read_excel('/home/sandbox/data.xlsx')
 df = df.dropna(subset=['key_col'])
 df['Date'] = pd.to_datetime(df['Date'])
-df.to_pickle('/home/daytona/clean_data.pkl')
-print(f'✅ Kaydedildi: {len(df):,} satır')
+print(f'✅ Loaded and cleaned: {len(df):,} rows')
 
-# Execute 2+: Pickle'dan oku (10x daha hızlı)
-df = pd.read_pickle('/home/daytona/clean_data.pkl')
+# Execute 2+: df already in memory
+print(f'df still here: {len(df):,} rows')
 ```
 
-## Analiz Stratejisi
+## Analysis Strategy
 
-1. **Schema'yı oku** → hangi kolonlar var, tipleri ne?
-2. **Kullanıcı ne istiyor?** → sorguyu analiz et
-3. **Hangi analizler mümkün?** → mevcut kolonlara göre karar ver
-4. **Yapılamayan analizi atla** → eksik kolon varsa o analizi yapma, kullanıcıya bildir
+1. **Read the schema** → which columns exist, what are their types?
+2. **What does the user want?** → analyze the query
+3. **Which analyses are possible?** → decide based on available columns
+4. **Skip impossible analyses** → if a column is missing, skip that analysis and inform the user
 
-## Yaygın Hatalar
+## Common Mistakes
 
-- **Ortalama hesabı**: Satır ortalaması mı, grup ortalaması mı? Bağlama göre karar ver.
-  Sipariş değeri → `df.groupby('order_id')['amount'].sum().mean()` ✅  Satır bazlı mean ❌
-- **Negatif değerler**: Silme — önce anla. İade mi? Borç mu? Brüt/net ayrımı yap.
-- **Unique sayma**: `.nunique()` kullan, `len()` veya `count()` değil.
-- **Büyük kombinasyonlar**: Ürün çifti analizi → önce popüler öğeleri filtrele:
+- **Average calculation**: Row-level average or group average? Decide by context.
+  Order value → `df.groupby('order_id')['amount'].sum().mean()` ✅  Row-level mean ❌
+- **Negative values**: Don't delete — first understand. Refund? Debit? Distinguish gross/net.
+- **Unique counting**: Use `.nunique()`, not `len()` or `count()`.
+- **Large combinations**: Product pair analysis → filter popular items first:
   `popular = df.groupby('col').size().pipe(lambda s: s[s > 50].index)`
 
-## Analiz Kalitesi
+## Analysis Quality
 
-### Sonuçları Doğrula
-Kategorik değer çıkardıysan en sık 10 sonuca bak — gerçekten o kategoriyi temsil ediyor mu?
+### Validate Results
+If you extracted categorical values, check the top 10 — do they truly represent that category?
 ```python
 print(df['extracted_col'].value_counts().head(10))
-# Anlamsız çıktı varsa algoritmayı düzelt, rapora koyma
+# If output is nonsensical, fix the algorithm — don't include in report
 ```
-Bilinmeyen/fallback oranı %20'yi aşıyorsa: algoritmayı genişlet.
+If unknown/fallback ratio exceeds 20%: expand the algorithm.
 
-### Skor/Index — Normalize Et
+### Score/Index — Normalize
 ```python
-# ❌ YANLIŞ: score = col_a * 0.4 + col_b * 0.4  (ölçekler farklı → anlamsız)
-# ✅ DOĞRU:
+# ❌ WRONG: score = col_a * 0.4 + col_b * 0.4  (different scales → meaningless)
+# ✅ CORRECT:
 df['norm_a'] = (df['a'] - df['a'].min()) / (df['a'].max() - df['a'].min())
 df['norm_b'] = (df['b'] - df['b'].min()) / (df['b'].max() - df['b'].min())
 df['score'] = df['norm_a'] * 0.5 + df['norm_b'] * 0.5
 ```
 
-### Önerileri Veriden Türet
-Her öneri SOMUT sayı içermeli — generic cümle YASAK.
-- ❌ "Bütçeyi artırın"
-- ✅ "A grubu ort. değer 127 ama performans 8.3 — %20 artışla hala üst segmentte kalır"
+### Derive Recommendations from Data
+Every recommendation MUST contain CONCRETE numbers — generic statements FORBIDDEN.
+- ❌ "Increase the budget"
+- ✅ "Group A avg value is 127 but performance is 8.3 — a 20% increase still keeps it in the top segment"
 
-### Analiz Sınırlarını Bildir
-Raporun sonunda: hangi varsayımlar yapıldı, hangi temizleme adımları sonuçları etkileyebilir.
+### Disclose Analysis Limitations
+At the end of the report: what assumptions were made, which cleaning steps may affect results.
 
-## Süreç Kuralları
+## Process Rules
 
-### Tüm veriyi işle
-`.head(1000)`, `[:5000]`, `nrows=50000`, `nrows=5` → **YASAK**.
-`parse_file` schema'yı zaten veriyor — `nrows` ile tekrar okuma yapma.
-Sonuç gösteriminde `.head(10)`, `.most_common(20)` serbest.
+### Process ALL data
+`.head(1000)`, `[:5000]`, `nrows=50000`, `nrows=5` → **FORBIDDEN**.
+`parse_file` already provides the schema — don't re-read with `nrows`.
+For display: `.head(10)`, `.most_common(20)` are fine.
 
-### Doğrulama (execute kodunun İÇİNDE yap)
-Ayrı execute harcama — analiz kodunun SONUNA ekle:
+### Validation (do it INSIDE the execute code)
+Don't waste a separate execute — append to the END of analysis code:
 ```python
-# === DOĞRULAMA ===
-assert len(df) > 0, 'DataFrame boş!'
-assert metric > 0, f'Metrik negatif/sıfır: {metric}'
-print(f'Null: {df.isnull().sum().sum()}')
-print('✅ Doğrulama OK')
+# === VALIDATION ===
+assert len(df) > 0, 'DataFrame is empty!'
+assert metric > 0, f'Metric is negative/zero: {metric}'
+print(f'Nulls: {df.isnull().sum().sum()}')
+print('✅ Validation OK')
 ```
-"✅ Doğrulama OK" görmezsen → rapora KOYMA, önce düzelt.
+If you don't see "✅ Validation OK" → do NOT include in report, fix first.
 
-### Formülleri göster
-Her türetilmiş metrik için bileşenleri print et:
-`print(f'AOV = {toplam:,.0f} / {siparis_sayisi:,} = {aov:.2f}')`
+### Show formulas
+For every derived metric, print its components:
+`print(f'AOV = {total:,.0f} / {order_count:,} = {aov:.2f}')`
 
-### Hata yönetimi
-Script içinde try/except ile yakala — ayrı execute YAPMA.
-Execute bloklandıysa: hata mesajını oku, sadece sorunlu kısmı değiştir.
+### Error handling
+Catch with try/except inside the script — do NOT use a separate execute.
+If execute was blocked: read the error message, fix only the problematic part.
 
-### Dosya doğrulama
+### File validation
 ```python
 assert os.path.exists(output_path), f'File not created: {output_path}'
 print(f'OK: {output_path} ({os.path.getsize(output_path)/1024:.1f} KB)')
 ```
 
-### Metrik hesaplama ve PDF aynı execute'da olmalı
-Önceki execute'dan gelen sayıları `m = {'total': 1234, ...}` şeklinde ASLA elle yazma.
-Her metrik, **kodla hesaplanmalı** — pickle veya CSV'den okuyarak.
+### Metric computation and PDF must be in the same execute
+NEVER hardcode numbers from previous execute output as `m = {'total': 1234, ...}`.
+Every metric MUST be **computed in code** — df is already in memory.
 ```python
-# ❌ YANLIŞ — önceki execute çıktısından kopyalanan hardcoded sayılar:
+# ❌ WRONG — hardcoded numbers copied from previous execute output:
 m = {'total_customers': 4383, 'total_revenue': 8348208.57}
 
-# ✅ DOĞRU — aynı execute içinde hesapla:
-df = pd.read_pickle('/home/daytona/clean_data.pkl')
+# ✅ CORRECT — compute in the same execute (df in memory):
 m = {
     'total_customers': df['Customer ID'].nunique(),
     'total_revenue': (df['Quantity'] * df['Price']).sum(),
 }
 ```
-Analiz pickle'dan, tablo verileri ve PDF üretimi **tek bir execute** içinde tamamlanmalı.
+Analysis and PDF generation MUST be completed in a **single execute**.
 
-### SELF-CHECK: Artifact Generation Öncesi Kontrol (MANDATORY)
+### SELF-CHECK: Before generate_html() (MANDATORY)
 
-⚠️ **Before EVERY `generate_html()` or WeasyPrint PDF call, verify variable scope:**
+⚠️ **`generate_html()` runs in a SEPARATE process — it cannot access Python variables.**
+You must build the complete HTML string inside execute() and pass it as a literal to generate_html().
 
-```
-DUSUNCE: [Pre-flight check before artifact generation]
-[ ] m dict bu execute'da hesaplandi mi? (Onceki execute'da ise UNDEFINED)
-[ ] Chart data arrays (monthly_labels, revenues, etc.) bu scope'da mi?
-[ ] DataFrame'ler (top_products, top_customers) bu execute'da mi?
-[ ] Hepsi OK ise -> artifact generation yap
-[ ] Herhangi biri eksikse -> hesaplamayi bu execute'a tasi
-```
+**Variables persist across execute() calls (persistent kernel):**
+- m dict computed in execute #1 → available in execute #2+ ✅
+- df loaded in execute #1 → available in execute #2+ ✅
 
-**Real example of the bug:**
-```
-# Execute #4
-m = {'total_orders': 36969, ...}  # Calculated here
-print('Metrics ready')
+**But generate_html() is NOT an execute — it's a separate tool:**
+- generate_html(html_code=html) → html must be a complete string, not a variable reference
 
-# Execute #5 (WRONG - NEW subprocess!)
-html = f"<h3>{m['total_orders']}</h3>"  # m undefined -> empty KPI cards
-generate_html(html_code=html)
-```
-
-**Fixed version:**
-```
-# CORRECT: Single execute - calculation + HTML together
-df = pd.read_pickle('/home/daytona/clean.pkl')
-m = {'total_orders': df['Invoice'].nunique(), ...}
+**Correct pattern:**
+```python
+# Execute: build HTML string using persisted variables (df, m already in kernel)
+m = {'total_orders': df['Invoice'].nunique(), ...}  # df from previous execute
 monthly_data = df.groupby('month')['revenue'].sum().tolist()
 
 html = f'''
-<h3>{m['total_orders']:,}</h3>  <!-- m is defined -->
-<script>const data = {monthly_data};</script>  <!-- monthly_data defined -->
+<h3>{m['total_orders']:,}</h3>
+<script>const data = {monthly_data};</script>
 '''
-generate_html(html_code=html)
+generate_html(html_code=html)  # Pass literal string — OK
 ```
 
 **If user reports empty dashboard/PDF:**
-1. Immediately recognize: "Execute isolation violation"
-2. Regenerate with single execute pattern
-3. DO NOT wait for user to explain — catch this yourself
+1. Recognize: "generate_html() cannot access Python variables directly"
+2. Build complete HTML string with data embedded inside execute()
+3. Then pass the string to generate_html()
 
 ## Quick Start
 
-### Reading Excel Files — Önce Sheet Sayısını Kontrol Et
+### Reading Excel Files — Always Check Sheet Count First
 
-⚠️ **`pd.read_excel(path)` direkt KULLANMA** — sadece ilk sheet'i alır.
-Her zaman önce sheet listesini kontrol et:
+⚠️ **Do NOT use `pd.read_excel(path)` directly** — it only reads the first sheet.
+Always check the sheet list first:
 
 ```python
 import pandas as pd
 
-file_path = '/home/daytona/data.xlsx'
+file_path = '/home/sandbox/data.xlsx'
 xls = pd.ExcelFile(file_path)
 sheet_names = xls.sheet_names
-print(f"Sheet sayısı: {len(sheet_names)} → {sheet_names}")
+print(f"Sheet count: {len(sheet_names)} → {sheet_names}")
 
 if len(sheet_names) == 1:
-    # Tek sayfa — direkt oku
+    # Single sheet — read directly
     df = pd.read_excel(file_path)
-    print(f"Tek sheet: {df.shape}")
+    print(f"Single sheet: {df.shape}")
 else:
-    # Çok sayfa — tüm sheet'leri dict'e yükle
+    # Multiple sheets — load all into dict
     all_sheets = pd.read_excel(file_path, sheet_name=None)
     for name, sheet_df in all_sheets.items():
-        print(f"  '{name}': {sheet_df.shape[0]:,} satır x {sheet_df.shape[1]} kolon")
-        print(f"    Kolonlar: {list(sheet_df.columns)}")
+        print(f"  '{name}': {sheet_df.shape[0]:,} rows x {sheet_df.shape[1]} cols")
+        print(f"    Columns: {list(sheet_df.columns)}")
 ```
 
-**Çok sayfalı analiz stratejileri (pandas, <40MB):**
+**Multi-sheet analysis strategies (pandas, <40MB):**
 ```python
-# Aynı kolonlar (dönemsel: Ocak/Şubat/Mart) → birleştir
+# Same columns (periodic: Jan/Feb/Mar) → concatenate
 df_combined = pd.concat(
     [sheet_df.assign(sheet=name) for name, sheet_df in all_sheets.items()],
     ignore_index=True
 )
-print(f"Birleşik: {len(df_combined):,} satır")
+print(f"Combined: {len(df_combined):,} rows")
 
-# Farklı konular (Siparisler + Musteriler) → merge
-df_orders = all_sheets['Siparisler']
-df_customers = all_sheets['Musteriler']
+# Different topics (Orders + Customers) → merge
+df_orders = all_sheets['Orders']
+df_customers = all_sheets['Customers']
 df_merged = df_orders.merge(df_customers, on='Customer ID', how='left')
 
-# Bağımsız sheet'ler → ayrı analiz
+# Independent sheets → separate analysis
 for name, sheet_df in all_sheets.items():
     print(f"{name}: {sheet_df.describe()}")
 ```
@@ -239,13 +224,13 @@ for name, sheet_df in all_sheets.items():
 ```python
 import os
 
-file_path = '/home/daytona/data.xlsx'
+file_path = '/home/sandbox/data.xlsx'
 file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
 print(f"File size: {file_size_mb:.1f} MB")
 
 if file_size_mb < 40:
     print("Strategy: Direct pandas load")
-    # Sheet detection yukarıdaki pattern ile yap
+    # Use sheet detection pattern from above
 elif file_size_mb < 500:
     print("Strategy: Convert to CSV + DuckDB lazy queries")
     # See large file handling below
@@ -268,87 +253,86 @@ else:
 
 ## Multi-Sheet Handling
 
-→ Bkz. **Quick Start → Reading Excel Files** bölümü: sheet tespiti ve analiz stratejileri orada.
+→ See **Quick Start → Reading Excel Files** section for sheet detection and analysis strategies.
 
-**Özet:**
-- Her zaman `pd.ExcelFile(path).sheet_names` ile başla
-- Tek sheet: `pd.read_excel(path)` ✔️
-- Çok sheet: `pd.read_excel(path, sheet_name=None)` → dict
-- Aynı kolonlar → `pd.concat(... assign(sheet=name))`
-- Farklı konular → `merge(on='ortak_kolon')`
-- ≥40MB → CSV dönüşümü + DuckDB (bkz. references/large_files.md)
+**Summary:**
+- Always start with `pd.ExcelFile(path).sheet_names`
+- Single sheet: `pd.read_excel(path)` ✔️
+- Multiple sheets: `pd.read_excel(path, sheet_name=None)` → dict
+- Same columns → `pd.concat(... assign(sheet=name))`
+- Different topics → `merge(on='common_column')`
+- ≥40MB → CSV conversion + DuckDB (see references/large_files.md)
 
-## Rapor Başlıklı Excel Format Sorunları (Header-Offset)
+## Report-Style Excel Format Issues (Header-Offset)
 
-Otomatik üretilen Excel raporlarında (Logo, VMS, SAP, Netsis vb.) ilk birkaç satır rapor meta bilgisi içerir.
-Gerçek kolon başlıkları 3-5. satırda başlar.
+Auto-generated Excel reports (Logo, VMS, SAP, Netsis, etc.) often have metadata in the first few rows.
+Actual column headers start at row 3-5.
 
-**Gerçek pivot tablo** (pd.pivot_table çıktısı) ile karıştırma — bu farklı bir sorundur:
+**Don't confuse** with real pivot tables (pd.pivot_table output) — that's a different issue:
 ```
-Satır 1: "Malzeme Stok Raporu - 01.03.2025"   ← rapor adı (meta)
-Satır 2: "Dönem: Ocak-Mart 2025"               ← meta bilgi
-Satır 3: "Hazırlayan: Muhasebe"                ← meta bilgi
-Satır 4: (boş)
-Satır 5: malzeme_kodu | malzeme_adi | miktar   ← GERÇEK başlık
-Satır 6: 10001        | Vida M6     | 500       ← veri başlangıcı
+Row 1: "Material Stock Report - 01.03.2025"   ← report title (meta)
+Row 2: "Period: Jan-Mar 2025"                 ← meta info
+Row 3: "Prepared by: Accounting"              ← meta info
+Row 4: (empty)
+Row 5: material_code | material_name | qty    ← REAL header
+Row 6: 10001         | Screw M6      | 500   ← data start
 ```
 
-Otomatik üretilen Excel raporlarında (Logo, VMS, SAP vb.) ilk satır genellikle gerçek veri başlığı değildir.
-`parse_file` schema'sına baktıktan sonra kolon adlarını kontrol et:
+In auto-generated Excel reports (Logo, VMS, SAP, etc.) the first row is usually NOT the real data header.
+After checking the `parse_file` schema, verify column names:
 
-**Şüpheli durumlar — `parse_file` sonrası kontrol et:**
-- Kolon adı `Unnamed: 0`, `Unnamed: 1` → başlık satırı yanlış satırda
-- Kolon adı `Rapor:`, `Tarih:`, `Dönem:` gibi bir etiket → üst başlık satırı var, `skiprows` gerekli
-- İlk 1-3 satır boş veya meta bilgisi → `skiprows=N` ile atla
+**Suspicious cases — check after `parse_file`:**
+- Column name `Unnamed: 0`, `Unnamed: 1` → header row is at wrong position
+- Column name looks like a label (`Report:`, `Date:`, `Period:`) → there's a title row above, `skiprows` needed
+- First 1-3 rows are empty or metadata → skip with `skiprows=N`
 
 ```python
-# Tespit: hangi satırda gerçek kolon adları var?
+# Detect: which row has the real column names?
 df_check = pd.read_excel(file_path, nrows=10, header=None)
 for i, row in df_check.iterrows():
     non_null = row.dropna()
-    print(f"Satır {i}: {list(non_null.values)[:6]}")
-# → Kolon adlarının (malzeme_kodu, miktar vb.) hangi satırda göründüğünü bul
+    print(f"Row {i}: {list(non_null.values)[:6]}")
+# → Find which row contains actual column names
 ```
 
 ```python
-# Durum 1: İlk satır rapor başlığı, 2. satır kolon adları
+# Case 1: First row is report title, 2nd row is column names
 df = pd.read_excel(file_path, skiprows=1)
 
-# Durum 2: İlk N satır meta bilgi
-df = pd.read_excel(file_path, header=2)  # 3. satır (0-indexed) kolon adı
+# Case 2: First N rows are metadata
+df = pd.read_excel(file_path, header=2)  # 3rd row (0-indexed) is column header
 
-# Durum 3: Kolon adı hiç yok → manuel tanımla
+# Case 3: No column names at all → define manually
 df = pd.read_excel(file_path, header=None,
-                   names=['malzeme_kodu', 'malzeme_adi', 'miktar', 'birim'])
+                   names=['material_code', 'material_name', 'quantity', 'unit'])
 
-# Durum 4: Kolon adları doğru ama fazladan alt başlık satırı var (pivot)
+# Case 4: Column names correct but extra sub-header row exists (pivot)
 df = pd.read_excel(file_path, skiprows=1)
-df = df.dropna(how='all')          # Tamamen boş satırları at
-df = df[df.iloc[:, 0].notna()]     # İlk kolon boş olan satırları at
+df = df.dropna(how='all')          # Drop completely empty rows
+df = df[df.iloc[:, 0].notna()]     # Drop rows where first column is empty
 ```
 
-**Kolon adları hâlâ bozuksa:**
+**If column names are still broken:**
 ```python
-# Mevcut kolon adlarını düzelt
-df.columns = df.columns.str.strip()               # Baştaki/sondaki boşlukları temizle
-df.columns = df.columns.str.replace('\n', ' ')    # Satır sonu karakterleri
+# Fix existing column names
+df.columns = df.columns.str.strip()               # Remove leading/trailing whitespace
+df.columns = df.columns.str.replace('\n', ' ')    # Remove newline characters
 df = df.rename(columns={
-    'Malzeme\nKodu': 'malzeme_kodu',
-    'Unnamed: 2':    'miktar',
+    'Material\nCode': 'material_code',
+    'Unnamed: 2':     'quantity',
 })
 ```
 
-## PDF Rapor Üretimi — WeasyPrint
+## PDF Report Generation — WeasyPrint
 
-PDF için her zaman `weasyprint` kullan (`fpdf2` değil — Türkçe karakter sorunları).
-**Metrik hesaplama ve PDF üretimi aynı execute'da olmalı.**
+Always use `weasyprint` for PDF (`fpdf2` has issues with Turkish/Unicode characters).
+**Metric computation and PDF generation must be in the same execute.**
 
 ```python
 import weasyprint
 import os
 
-# m dict — pickle veya DuckDB'den hesapla (hardcode YASAK)
-df = pd.read_pickle('/home/daytona/clean_data.pkl')
+# m dict — df already in memory (persistent kernel) — hardcoding FORBIDDEN
 m = {
     'total':        int(df['ID'].nunique()),
     'revenue':      float((df['Qty'] * df['Price']).sum()),
@@ -369,44 +353,44 @@ html = f'''<!DOCTYPE html>
   td      {{ padding: 8px; border-bottom: 1px solid #e2e8f0; }}
   .insight{{ background: #f0fff4; border-left: 4px solid #38a169; padding: 12px; }}
 </style></head><body>
-<h1>Analiz Raporu</h1>
-<p><strong>Tarih:</strong> {m["analysis_date"]}</p>
-<div class="metric">Toplam: <span class="value">{m["total"]:,}</span></div>
-<div class="metric">Gelir: <span class="value">${m["revenue"]:,.2f}</span></div>
+<h1>Analysis Report</h1>
+<p><strong>Date:</strong> {m["analysis_date"]}</p>
+<div class="metric">Total: <span class="value">{m["total"]:,}</span></div>
+<div class="metric">Revenue: <span class="value">${m["revenue"]:,.2f}</span></div>
 </body></html>'''
 
-html_path = '/home/daytona/temp_report.html'
-pdf_path  = '/home/daytona/rapor.pdf'
+html_path = '/home/sandbox/temp_report.html'
+pdf_path  = '/home/sandbox/rapor.pdf'
 with open(html_path, 'w', encoding='utf-8') as f:
     f.write(html)
 
 weasyprint.HTML(filename=html_path).write_pdf(pdf_path)
-assert os.path.exists(pdf_path), f'PDF oluşturulamadı'
+assert os.path.exists(pdf_path), f'PDF creation failed'
 print(f'✅ PDF: {os.path.getsize(pdf_path)//1024} KB')
 os.remove(html_path)
 ```
 
-**Tablo döngüsü (DataFrame → HTML tablo):**
+**Table loop (DataFrame → HTML table):**
 ```python
 rows_html = ''
 for _, row in top_df.iterrows():
     rows_html += f'<tr><td>{row["id"]}</td><td>{row["value"]:,.2f}</td></tr>\n'
 
 html_table = f'''<table>
-<tr><th>ID</th><th>Değer</th></tr>
+<tr><th>ID</th><th>Value</th></tr>
 {rows_html}
 </table>'''
 ```
 
-**Tarih formatlama — datetime objesinde `[:10]` ÇALIŞMAZ:**
+**Date formatting — `[:10]` does NOT work on datetime objects:**
 ```python
-# ❌ Hatalı
+# ❌ Wrong
 date_str = row['InvoiceDate'][:10]
 
-# ✅ Doğru
+# ✅ Correct
 date_str = pd.to_datetime(row['InvoiceDate']).strftime('%Y-%m-%d')
 
-# ✅ DuckDB'den direkt string olarak çek (daha güvenli)
+# ✅ Pull as string directly from DuckDB (safer)
 # SELECT CAST(MIN(InvoiceDate) AS VARCHAR)[:10] as first_order
 ```
 
@@ -415,7 +399,7 @@ date_str = pd.to_datetime(row['InvoiceDate']).strftime('%Y-%m-%d')
 Excel merged cells appear as NaN in non-first rows. Always forward-fill:
 
 ```python
-df = pd.read_excel('/home/daytona/data.xlsx')
+df = pd.read_excel('/home/sandbox/data.xlsx')
 
 # Forward fill merged cell values
 df = df.ffill()
@@ -429,7 +413,7 @@ df['Category'] = df['Category'].ffill()
 ```python
 from openpyxl import load_workbook
 
-wb = load_workbook('/home/daytona/data.xlsx')
+wb = load_workbook('/home/sandbox/data.xlsx')
 ws = wb.active
 
 # List all merged cell ranges
@@ -441,14 +425,14 @@ for merged_range in ws.merged_cells.ranges:
 
 ```python
 # Force column types during read
-df = pd.read_excel('/home/daytona/data.xlsx', dtype={
+df = pd.read_excel('/home/sandbox/data.xlsx', dtype={
     'ID': str,           # Prevent leading zero loss
     'ZipCode': str,      # Keep as text
     'Amount': float,
 })
 
 # Date parsing
-df = pd.read_excel('/home/daytona/data.xlsx', parse_dates=['Date', 'Created'])
+df = pd.read_excel('/home/sandbox/data.xlsx', parse_dates=['Date', 'Created'])
 
 # Handle mixed types
 df['Price'] = pd.to_numeric(df['Price'], errors='coerce')  # Non-numeric → NaN
@@ -461,7 +445,7 @@ df['Price'] = pd.to_numeric(df['Price'], errors='coerce')  # Non-numeric → NaN
 ```python
 import pandas as pd
 
-df = pd.read_excel('/home/daytona/data.xlsx')
+df = pd.read_excel('/home/sandbox/data.xlsx')
 
 # Overview
 print(f"Shape: {df.shape}")
@@ -557,7 +541,7 @@ Every output workbook MUST have zero formula errors. Check for:
 ```python
 from openpyxl import load_workbook
 
-wb = load_workbook('/home/daytona/output.xlsx')
+wb = load_workbook('/home/sandbox/output.xlsx')
 ws = wb.active
 
 error_types = ['#REF!', '#DIV/0!', '#VALUE!', '#NAME?', '#NULL!', '#N/A', '#NUM!']
@@ -582,10 +566,10 @@ else:
 
 ```python
 # Write single sheet
-df.to_excel('/home/daytona/output.xlsx', index=False, sheet_name='Results')
+df.to_excel('/home/sandbox/output.xlsx', index=False, sheet_name='Results')
 
 # Write multiple sheets
-with pd.ExcelWriter('/home/daytona/output.xlsx', engine='openpyxl') as writer:
+with pd.ExcelWriter('/home/sandbox/output.xlsx', engine='openpyxl') as writer:
     sales_df.to_excel(writer, sheet_name='Sales', index=False)
     summary_df.to_excel(writer, sheet_name='Summary', index=False)
 ```
@@ -622,7 +606,7 @@ for col in ws.columns:
     max_length = max(len(str(cell.value or '')) for cell in col)
     ws.column_dimensions[col[0].column_letter].width = min(max_length + 2, 50)
 
-wb.save('/home/daytona/output.xlsx')
+wb.save('/home/sandbox/output.xlsx')
 print("✅ Styled Excel file saved")
 ```
 
@@ -631,7 +615,7 @@ print("✅ Styled Excel file saved")
 ```python
 from openpyxl import load_workbook
 
-wb = load_workbook('/home/daytona/data.xlsx')
+wb = load_workbook('/home/sandbox/data.xlsx')
 
 # List all named ranges
 for name, defn in wb.defined_names.items():

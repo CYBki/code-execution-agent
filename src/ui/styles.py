@@ -59,12 +59,12 @@ CUSTOM_CSS = """
     background: #fef2f2;
 }
 
-/* ── Status badges ── */
+/* ── Status badges (Modern color palette) ── */
 .status-running {
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    color: #2563eb;
+    color: #0ea5e9;  /* sky blue */
     font-size: 0.8rem;
 }
 
@@ -72,7 +72,7 @@ CUSTOM_CSS = """
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    color: #16a34a;
+    color: #10b981;  /* emerald */
     font-size: 0.8rem;
 }
 
@@ -80,7 +80,15 @@ CUSTOM_CSS = """
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    color: #dc2626;
+    color: #ef4444;  /* rose red */
+    font-size: 0.8rem;
+}
+
+.status-warning {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: #f59e0b;  /* amber */
     font-size: 0.8rem;
 }
 
@@ -105,6 +113,143 @@ CUSTOM_CSS = """
     height: 6px;
     border-radius: 50%;
     background: #9ca3af;
+}
+
+/* ── Spinner rotation animation ── */
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+/* ── Execute step animation (Modern pulse-glow) ── */
+@keyframes pulse-exec {
+    0%, 100% { transform: scale(1); opacity: 0.7; }
+    50% { transform: scale(1.3); opacity: 1; }
+}
+
+@keyframes pulse-glow {
+    0%, 100% {
+        box-shadow: 0 0 0 0 rgba(14, 165, 233, 0.4);
+        opacity: 0.8;
+    }
+    50% {
+        box-shadow: 0 0 0 6px rgba(14, 165, 233, 0);
+        opacity: 1;
+    }
+}
+
+/* ── Rotate spinner emoji in custom status header ── */
+.rotating-spinner {
+    display: inline-block;
+    animation: spin 1s linear infinite;
+    transform-origin: center center;
+    font-size: 1.1em;
+    margin-right: 8px;
+}
+
+/* ── Custom execute status container ── */
+.execute-status-container {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin: 8px 0;
+    transition: all 0.2s ease;
+}
+
+.execute-status-container:hover {
+    background: #f1f5f9;
+    border-color: #cbd5e1;
+}
+
+.execute-status-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.95rem;
+    font-weight: 500;
+    color: #334155;
+}
+
+/* Running state styling */
+.status-running {
+    border-left: 3px solid #0ea5e9;
+    background: linear-gradient(90deg, #f0f9ff 0%, #f8fafc 100%);
+}
+
+.status-running .execute-status-header {
+    color: #0ea5e9;
+}
+
+/* Complete state styling */
+.status-complete {
+    border-left: 3px solid #10b981;
+}
+
+.status-complete .execute-status-header {
+    color: #059669;
+}
+
+/* Error state styling */
+.status-error {
+    border-left: 3px solid #ef4444;
+    background: linear-gradient(90deg, #fef2f2 0%, #f8fafc 100%);
+}
+
+.status-error .execute-status-header {
+    color: #dc2626;
+}
+
+.exec-active-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #0ea5e9;  /* sky blue */
+    animation: pulse-glow 1.5s ease-in-out infinite;
+    display: inline-block;
+}
+
+.execute-step-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 8px;
+    background: #f0f9ff;  /* light sky */
+    border: 1px solid #bae6fd;  /* sky 200 */
+    border-radius: 12px;
+    font-size: 0.75rem;
+    color: #0ea5e9;  /* sky blue */
+    font-weight: 600;
+}
+
+/* ── Step state colors ── */
+.step-pending {
+    color: #94a3b8;  /* slate gray */
+    opacity: 0.6;
+}
+
+.step-active {
+    color: #0ea5e9;  /* sky blue */
+    animation: pulse-glow 1.5s ease-in-out infinite;
+}
+
+.step-done {
+    color: #64748b;  /* dim gray */
+}
+
+.step-error {
+    color: #ef4444;  /* rose red */
+}
+
+/* ── Container styling ── */
+.execute-container {
+    background: #f8fafc;  /* very light */
+    border: 1px solid #e2e8f0;  /* light gray */
+    border-radius: 8px;
+}
+
+.execute-container:hover {
+    background: #f1f5f9;  /* hover effect */
 }
 
 /* ── Step timeline ── */

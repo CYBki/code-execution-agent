@@ -1,4 +1,4 @@
-"""Execute tool — run shell commands in the Daytona sandbox.
+"""Execute tool — run shell commands in the OpenSandbox.
 
 Handles the common python3 -c "..." pattern by writing code to a temp file
 first, avoiding shell quote-escaping issues that corrupt Python code.
@@ -12,7 +12,7 @@ import re
 import uuid
 
 from langchain_core.tools import tool
-from langchain_daytona import DaytonaSandbox
+from src.sandbox.manager import OpenSandboxBackend
 
 logger = logging.getLogger(__name__)
 
@@ -51,12 +51,12 @@ def _extract_python_code(command: str) -> str | None:
     return None
 
 
-def make_execute_tool(backend: DaytonaSandbox):
-    """Factory: create the execute tool bound to a Daytona backend."""
+def make_execute_tool(backend: OpenSandboxBackend):
+    """Factory: create the execute tool bound to an OpenSandbox backend."""
 
     @tool
     def execute(command: str) -> str:
-        """Execute a shell command inside the Daytona sandbox.
+        """Execute a shell command inside the sandbox.
 
         Use this to run Python scripts for data analysis, PDF generation, etc.
         The sandbox has pre-installed packages: pandas, openpyxl, numpy,

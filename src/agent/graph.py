@@ -1,4 +1,4 @@
-"""Agent builder — LangChain create_agent + Daytona sandbox.
+"""Agent builder — LangChain create_agent + OpenSandbox.
 
 Replaces create_deep_agent to eliminate unnecessary SubAgent, FilesystemMiddleware,
 and TodoListMiddleware. Only the middleware we actually need is included.
@@ -60,7 +60,7 @@ def build_agent(
     uploaded_files: list | None = None,
     user_query: str = "",
 ):
-    """Build LangChain agent with Daytona backend, skills, and minimal middleware.
+    """Build LangChain agent with OpenSandbox backend, skills, and minimal middleware.
 
     Returns:
         Tuple of (agent, checkpointer).
@@ -103,7 +103,6 @@ def build_agent(
     _seen_parse_files: set[str] = set()
     _execute_count = 0
     _max_execute = _compute_max_execute(user_query, uploaded_files)
-    _schema_discovered = False  # Track if first execute did schema discovery
     _total_blocked = 0  # Track total blocked attempts to prevent infinite loops
     _MAX_BLOCKED = 4   # After this many blocks, stop blocking and let code through
     _last_execute_failed = False  # Track if previous execute had error/assertion
@@ -118,10 +117,9 @@ def build_agent(
         MUST be called before each agent.stream() to prevent state leaking
         between user messages (closure variables persist in cached agent).
         """
-        nonlocal _execute_count, _schema_discovered, _total_blocked
+        nonlocal _execute_count, _total_blocked
         nonlocal _last_execute_failed, _correction_count, _consecutive_blocks
         _execute_count = 0
-        _schema_discovered = False
         _total_blocked = 0
         _last_execute_failed = False
         _correction_count = 0
@@ -131,25 +129,22 @@ def build_agent(
 
     @wrap_tool_call
     def smart_interceptor(request, handler):
-        nonlocal _execute_count, _schema_discovered, _total_blocked
+        nonlocal _execute_count, _total_blocked
         nonlocal _last_execute_failed, _correction_count, _consecutive_blocks
         tc = request.tool_call
         name = tc["name"]
         args = tc.get("args", {})
         tool_call_id = tc.get("id", "")
-        _phase = "-"  # Set per-execute below
 
         # Circuit breaker: too many consecutive blocks = infinite loop
         if _consecutive_blocks >= _MAX_CONSECUTIVE_BLOCKS:
             logger.error("[Tool] CIRCUIT BREAKER triggered (%d consecutive blocks)", _consecutive_blocks)
             return ToolMessage(
                 content=(
-                    f"🛑 CIRCUIT BREAKER: {_consecutive_blocks} ardışık blok (parse_file/ls tekrarı).\n\n"
-                    "Sonsuz döngüye girdin. HEMEN DUR.\n\n"
-                    "Kullanıcıya DÜRÜST OL:\n"
-                    "\"⚠️ Teknik sorun: Tool çağrılarında döngü oluştu. "
-                    "Lütfen 'Yeni Konuşma' ile oturumu sıfırlayın.\"\n\n"
-                    "BAŞKA TOOL ÇAĞIRMA. Sadece mesaj yaz ve DUR."
+                    f"🛑 CIRCUIT BREAKER: {_consecutive_blocks} consecutive blocks detected.\n\n"
+                    "You are in an infinite loop. STOP NOW.\n\n"
+                    "Tell user: 'A loop occurred in tool calls. Please start a new conversation.'\n\n"
+                    "DO NOT call any more tools. Write a message and STOP."
                 ),
                 tool_call_id=tool_call_id,
             )
@@ -157,8 +152,8 @@ def build_agent(
         # Block duplicate parse_file
         if name == "parse_file":
             filename = args.get("filename", "")
-            # Normalize path: remove /home/daytona/ prefix if present
-            filename_normalized = filename.replace("/home/daytona/", "").strip("/")
+            # Normalize path: remove /home/sandbox/ prefix if present
+            filename_normalized = filename.replace("/home/sandbox/", "").strip("/")
 
             if filename_normalized in _seen_parse_files:
                 logger.info("[Tool] BLOCKED duplicate parse_file(%s)", filename)
@@ -166,14 +161,13 @@ def build_agent(
                 _consecutive_blocks += 1
                 return ToolMessage(
                     content=(
-                        f"⛔ BLOKLANDΙ: '{filename}' zaten parse edildi (#{_total_blocked}. blok, ardışık #{_consecutive_blocks})\n\n"
-                        "parse_file ASLA TEKRAR ÇAĞIRMA — schema zaten sende var.\n"
-                        "ls/cat/os.listdir de YAPMA — dosya yolunu biliyorsun.\n\n"
-                        "BU ADIMI ATLA, DOĞRUDAN ŞU EXECUTE'U ÇALIŞTIR:\n"
-                        f"df = pd.read_excel('/home/daytona/{filename_normalized}')\n"
-                        f"df.to_pickle('/home/daytona/data.pkl')\n"
-                        f"print(f'✅ {{df.shape[0]}} satır, {{df.shape[1]}} kolon yüklendi')\n\n"
-                        "Başka tool ÇAĞIRMA (parse_file/ls) — EXECUTE yap!"
+                        f"⛔ BLOCKED: '{filename}' already parsed (block #{_total_blocked}, consecutive #{_consecutive_blocks})\n\n"
+                        "NEVER call parse_file again — you already have the schema.\n"
+                        "Do NOT use ls/cat/os.listdir — you know the file path.\n\n"
+                        "SKIP this step. Go DIRECTLY to execute:\n"
+                        f"df = pd.read_excel('/home/sandbox/{filename_normalized}')\n"
+                        f"print(f'✅ {{df.shape[0]}} rows, {{df.shape[1]}} columns loaded')\n\n"
+                        "Do NOT call parse_file/ls — call EXECUTE now."
                     ),
                     tool_call_id=tool_call_id,
                 )
@@ -186,20 +180,13 @@ def build_agent(
                 logger.info("[Tool] BLOCKED execute #%d (limit=%d)", _execute_count, _max_execute)
                 return ToolMessage(
                     content=f"⛔ Execute limit reached ({_max_execute}).\n"
-                            "YAPMAN GEREKENLER:\n"
-                            "1. Kullanıcıya DÜRÜST ol: '⚠️ PDF üretilemedi. Sebep: [gerçek sebep]. "
-                            "Tamamlanan analizler: [liste]. Tekrar denemek için oturumu sıfırlayın.'\n"
-                            "2. Metin özetinde SAYI KULLANMA — önceki execute'larda gördüğün rakamları hafızadan YAZMA\n"
-                            "3. 'Teknik sorun' DEME — gerçek sebebi söyle (kural ihlali, blok, hata)\n"
-                            "4. generate_html ile tamamlanmış analiz çıktısını gösterebilirsin (dashboard)\n"
-                            "5. Genel bulgular OK ama spesifik sayı ($11.78, %76, 278,329) YASAK",
+                            "YOU MUST:\n"
+                            "1. Be HONEST with user: tell real reason (not 'technical issue')\n"
+                            "2. Do NOT use specific numbers from memory in text summary\n"
+                            "3. You may show completed analysis with generate_html\n"
+                            "4. General findings OK but specific numbers FORBIDDEN in chat",
                     tool_call_id=tool_call_id,
                 )
-
-            # Phase tracking: exploration (first 2) → analysis → report (last 2)
-            _phase = "exploration" if _execute_count <= 2 else (
-                "report" if _execute_count >= _max_execute - 1 else "analysis"
-            )
 
             cmd = args.get("command", "")
 
@@ -211,48 +198,26 @@ def build_agent(
                 logger.info("[Tool] BLOCKED pip/subprocess in execute")
                 _execute_count -= 1  # Don't count blocked calls
                 return ToolMessage(
-                    content="⛔ pip install YASAK. Tüm paketler sandbox'ta PRE-INSTALLED:\n"
+                    content="⛔ pip install BLOCKED. All packages are PRE-INSTALLED in sandbox:\n"
                             "pandas, openpyxl, numpy, matplotlib, seaborn, plotly, duckdb, fpdf2, "
                             "scipy, scikit-learn, xlsxwriter, pdfplumber, weasyprint, python-pptx.\n\n"
-                            "EĞER 'ModuleNotFoundError: openpyxl' ALIRSAN:\n"
-                            "→ Sandbox paketleri henüz yüklenirken sorun oldu.\n"
-                            "→ Kullanıcıya DÜRÜST ol: 'Sandbox hazırlığı tamamlanamadı. Lütfen oturumu sıfırlayın.'\n"
-                            "→ pip install DENEME — bu kural ihlalidir ve execute hakkını harcarsın.",
+                            "If you get ModuleNotFoundError: sandbox setup incomplete.\n"
+                            "Tell user: 'Sandbox setup failed. Please start a new conversation.'\n"
+                            "Execute quota NOT consumed.",
                     tool_call_id=tool_call_id,
                 )
 
             # Block network requests (urllib, requests, wget, curl)
-            # Fonts are pre-installed at /home/daytona/*.ttf — no download needed
+            # Fonts are pre-installed in the Docker image
             net_patterns = ["urllib.request", "requests.get", "urlretrieve", "urlopen",
                             "wget", "curl ", "http://", "https://"]
             if any(p in cmd for p in net_patterns) and "cdn.jsdelivr" not in cmd:
                 logger.info("[Tool] BLOCKED network request in execute")
                 _execute_count -= 1
                 return ToolMessage(
-                    content="⛔ Sandbox'tan dış ağ isteği YASAK. "
-                            "Font dosyaları zaten kurulu: /home/daytona/DejaVuSans.ttf ve DejaVuSans-Bold.ttf. "
-                            "İndirme yapma, doğrudan kullan. "
-                            "Execute hakkın düşmedi.",
-                    tool_call_id=tool_call_id,
-                )
-
-            # Block pickle usage in early executes (multi-turn scope narrowing prevention)
-            # Allow pickle only in later phases (report generation)
-            if _execute_count <= 2 and "read_pickle" in cmd:
-                logger.info("[Tool] BLOCKED pickle usage in execute #%d (scope narrowing prevention)", _execute_count)
-                _execute_count -= 1
-                # Show available Excel files from parse_file calls
-                file_list = "\n".join(f"  - /home/daytona/{fn}" for fn in _seen_parse_files) if _seen_parse_files else ""
-                return ToolMessage(
-                    content=f"⛔ pd.read_pickle() BLOKLANDΙ (execute #{_execute_count + 1}, multi-turn scope narrowing önlemi)\n\n"
-                            "SEBEP: Pickle dosyası önceki turn'ün filtrelenmiş verisini içerebilir.\n"
-                            "Bu yeni soru için VERİYİ DOĞRUDAN EXCEL'DEN OKU:\n\n"
-                            f"Mevcut dosya(lar):\n{file_list or '  (parse_file henüz çağrılmadı)'}\n\n"
-                            "YAPMAN GEREKEN:\n"
-                            "df = pd.read_excel('/home/daytona/DOSYA.xlsx')  # Pickle değil, Excel!\n"
-                            "# Sonra analizini yap\n\n"
-                            "⚠️ RULE 2.5: Her yeni soru bağımsızdır, önceki pickle'ı kullanma.\n"
-                            "Execute hakkın düşmedi, kodu Excel okuyacak şekilde düzelt.",
+                    content="⛔ Network requests BLOCKED from sandbox. "
+                            "Fonts are pre-installed in Docker image. "
+                            "Execute quota NOT consumed.",
                     tool_call_id=tool_call_id,
                 )
 
@@ -270,57 +235,37 @@ def build_agent(
                 logger.info("[Tool] BLOCKED shell cmd '%s' in execute", detected)
                 _execute_count -= 1
                 _consecutive_blocks += 1
-                # Show real filenames from parse_file calls
-                file_list = "\n".join(f"  - /home/daytona/{fn}" for fn in _seen_parse_files) if _seen_parse_files else ""
-                instruction = (
-                    f"⛔ Shell command '{detected}' YASAK (ardışık blok #{_consecutive_blocks})\n\n"
-                    f"parse_file() zaten çalıştı, schema'yı gördün. Dosya(lar):\n{file_list or '  (parse_file henüz çağrılmadı)'}\n\n"
-                    "ŞİMDİ NE YAPMALISIN:\n"
-                    "1. ls/cat/parse_file YAPMA — dosya zaten orada, schema'yı biliyorsun\n"
-                    "2. DÜŞÜNCE yaz: 'parse_file'dan gördüğüm kolonlar: [...]. Şimdi pd.read_excel ile okuyacağım.'\n"
-                    "3. execute() çağır (ls/cat DEĞİL, pd.read_excel):\n"
-                    "   df = pd.read_excel('/home/daytona/DOSYA_ADI.xlsx')\n"
-                    "   print(df.shape)  # doğrulama\n"
+                file_list = ", ".join(f"/home/sandbox/{fn}" for fn in _seen_parse_files) if _seen_parse_files else "(parse_file not called yet)"
+                return ToolMessage(
+                    content=(
+                        f"⛔ Shell command '{detected}' BLOCKED (consecutive #{_consecutive_blocks})\n\n"
+                        f"Known files: {file_list}\n"
+                        "Use pd.read_excel() or pd.read_csv() instead of shell commands.\n"
+                        "Execute quota NOT consumed."
+                    ),
+                    tool_call_id=tool_call_id,
                 )
-                return ToolMessage(content=instruction, tool_call_id=tool_call_id)
 
             # Block Python filesystem exploration (os.listdir, glob, etc.)
-            # NOTE: os.path.exists and os.path.getsize are ALLOWED (Rule 8: output verification)
+            # NOTE: os.path.exists and os.path.getsize are ALLOWED (output verification)
             fs_patterns = ["os.listdir", "os.scandir", "glob.glob", "pathlib.Path"]
             if any(p in cmd for p in fs_patterns):
                 logger.info("[Tool] BLOCKED Python filesystem cmd in execute")
                 _execute_count -= 1
                 _consecutive_blocks += 1
-                # Show real filenames from parse_file calls
-                file_list = "\n".join(f"  - /home/daytona/{fn}" for fn in _seen_parse_files) if _seen_parse_files else ""
-                instruction = (
-                    f"⛔ Filesystem exploration YASAK (ardışık blok #{_consecutive_blocks})\n\n"
-                    f"parse_file() zaten çalıştı, schema'yı gördün. Dosya(lar):\n{file_list or '  (parse_file henüz çağrılmadı)'}\n\n"
-                    "ŞİMDİ NE YAPMALISIN:\n"
-                    "1. os.listdir/glob/parse_file YAPMA — dosya yollarını biliyorsun\n"
-                    "2. DÜŞÜNCE yaz: 'parse_file'dan kolonları gördüm, şimdi pd.read_excel ile okuyacağım'\n"
-                    "3. execute() çağır (os.listdir DEĞİL, pd.read_excel):\n"
-                    "   df = pd.read_excel('/home/daytona/DOSYA_ADI.xlsx')\n"
-                    "   print(df.shape)  # doğrulama\n"
+                file_list = ", ".join(f"/home/sandbox/{fn}" for fn in _seen_parse_files) if _seen_parse_files else "(parse_file not called yet)"
+                return ToolMessage(
+                    content=(
+                        f"⛔ Filesystem exploration BLOCKED (consecutive #{_consecutive_blocks})\n\n"
+                        f"Known files: {file_list}\n"
+                        "Use pd.read_excel() or pd.read_csv() directly.\n"
+                        "Execute quota NOT consumed."
+                    ),
+                    tool_call_id=tool_call_id,
                 )
-                return ToolMessage(content=instruction, tool_call_id=tool_call_id)
 
-            # Track schema discovery (first execute should discover columns)
-            if _execute_count == 1:
-                has_schema_check = any(k in cmd for k in (
-                    "df.columns", ".columns", "df.dtypes", ".dtypes",
-                    ".info()", "columns.tolist",
-                ))
-                if has_schema_check:
-                    _schema_discovered = True
-                    logger.info("[Tool] execute #1: schema discovery detected")
-
-            # If first execute is NOT schema discovery, warn in response
-            if _execute_count == 2 and not _schema_discovered:
-                logger.warning("[Tool] execute #2 without prior schema discovery")
-
-            # Block large nrows= in read_excel/read_csv (must read ALL data)
-            # Allow nrows<=10 for schema discovery (Rule 1: nrows=5)
+            # Block large nrows= in read_excel/read_csv (must read ALL data for analysis)
+            # Allow nrows<=10 for schema discovery
             nrows_match = re.search(r'nrows\s*=\s*(\d+)', cmd)
             if nrows_match and "fpdf" not in cmd.lower():
                 nrows_val = int(nrows_match.group(1))
@@ -328,36 +273,17 @@ def build_agent(
                     logger.info("[Tool] BLOCKED nrows=%d sampling in execute #%d", nrows_val, _execute_count)
                     _execute_count -= 1
                     return ToolMessage(
-                        content=f"⛔ nrows={nrows_val} YASAK — TÜM veriyi oku. "
-                                "Schema keşfi için nrows=5 serbest, ama analiz için tüm veriyi yükle. "
-                                "pd.read_excel('/home/daytona/dosya.xlsx') kullan.",
-                        tool_call_id=tool_call_id,
-                    )
-                elif _seen_parse_files:
-                    # parse_file already ran — schema exists, block re-check
-                    logger.info("[Tool] BLOCKED schema re-check nrows=%d (parse_file already ran)", nrows_val)
-                    _execute_count -= 1
-                    fname = next(iter(_seen_parse_files), "dosya.xlsx")
-                    return ToolMessage(
-                        content=(
-                            f"⛔ Schema re-check BLOKLANDΙ (nrows={nrows_val}). "
-                            "parse_file zaten schema verdi — nrows ile tekrar okuma YAPMA. "
-                            "Hemen CSV dönüşümüne geç:\n"
-                            f"xls = pd.ExcelFile('/home/daytona/{fname}')\n"
-                            "for sheet in xls.sheet_names:\n"
-                            f"    df = pd.read_excel('/home/daytona/{fname}', sheet_name=sheet)\n"
-                            "    df.to_csv(f'/home/daytona/temp_{{sheet}}.csv', index=False); del df\n"
-                            "Execute hakkın düşmedi."
-                        ),
+                        content=f"⛔ nrows={nrows_val} BLOCKED — read ALL data for analysis. "
+                                "nrows<=10 is OK for schema discovery, but analysis needs full data. "
+                                "Execute quota NOT consumed.",
                         tool_call_id=tool_call_id,
                     )
                 else:
                     logger.info("[Tool] Allowed nrows=%d for schema discovery", nrows_val)
 
-            # Block sampling in analysis (head/sample/slice with large N, islice)
-            # Exploration phase: allow .head(200) for data discovery
-            # Analysis/report phase: strict limit (top-50 for display only)
-            sampling_limit = 200 if _phase == "exploration" else 50
+            # Block only excessive sampling (>500 rows is likely reading full data via head)
+            # Normal display/analysis usage (.head(60), .head(100), .head(200)) is fine
+            sampling_limit = 500
             sampling_hits = re.findall(
                 r'\.head\((\d+)\)|\.sample\((\d+)\)|\[:(\d+)\]|islice\([^,]+,\s*(\d+)\)', cmd
             )
@@ -370,10 +296,9 @@ def build_agent(
                     logger.info("[Tool] BLOCKED large sampling (%d) in execute #%d", n, _execute_count)
                     _execute_count -= 1
                     return ToolMessage(
-                        content=f"⛔ .head({n}) / [:{n}] BLOKLANDI — bu satır sınırını koddan KALDIR. "
-                                f"Sadece `df = pd.read_excel(path)` veya `pd.read_csv(path)` kullan (limit yok). "
-                                "Dosya okunabilir, openpyxl kurulu, sorun yok — sadece örnekleme satırını sil. "
-                                "Execute hakkın düşmedi, aynı kodu head/sample/slice olmadan tekrar gönder.",
+                        content=f"⛔ .head({n}) / [:{n}] BLOCKED — remove this sampling limit from code. "
+                                "Use pd.read_excel(path) or pd.read_csv(path) without limits. "
+                                "Execute quota NOT consumed. Resend same code without head/sample/slice.",
                         tool_call_id=tool_call_id,
                     )
 
@@ -407,21 +332,21 @@ def build_agent(
                 cmd = re.sub(r"(set_font\(['\"]DejaVu['\"],\s*)['\"]I['\"]", r"\1''", cmd)
                 cmd = re.sub(r"(set_font\(['\"]DejaVu['\"],\s*)['\"]BI['\"]", r"\1'B'", cmd)
 
-                # Fix 2c: Replace wrong font paths (/usr/share → /home/daytona)
+                # Fix 2c: Replace wrong font paths (/usr/share → /home/sandbox)
                 cmd = cmd.replace(
                     '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
-                    '/home/daytona/DejaVuSans.ttf'
+                    '/home/sandbox/DejaVuSans.ttf'
                 )
                 cmd = cmd.replace(
                     '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
-                    '/home/daytona/DejaVuSans-Bold.ttf'
+                    '/home/sandbox/DejaVuSans-Bold.ttf'
                 )
 
                 # Fix 3: Inject add_font if DejaVu used but not declared
                 if "DejaVu" in cmd and "add_font" not in cmd:
                     font_setup = (
-                        "pdf.add_font('DejaVu', '', '/home/daytona/DejaVuSans.ttf', uni=True)\n"
-                        "pdf.add_font('DejaVu', 'B', '/home/daytona/DejaVuSans-Bold.ttf', uni=True)\n"
+                        "pdf.add_font('DejaVu', '', '/home/sandbox/DejaVuSans.ttf', uni=True)\n"
+                        "pdf.add_font('DejaVu', 'B', '/home/sandbox/DejaVuSans-Bold.ttf', uni=True)\n"
                     )
                     # Insert after first add_page()
                     cmd = re.sub(
@@ -474,19 +399,18 @@ def build_agent(
                         _execute_count -= 1
                         _total_blocked += 1
                         return ToolMessage(
-                            content=f"⛔ RULE 3 İHLALİ: Metrik değişkenlere hardcoded sayı atanmış: {examples}. "
-                                    "Bu değerler veriyi okuyup hesaplanmalı (pd.read_excel → df.sum() vb.). "
-                                    "Analiz ve PDF TEK BİR SCRIPT'te olmalı — ayrı execute'a bölme. "
-                                    "Veriyi oku → hesapla → validate → PDF üret, hepsi tek script içinde.",
+                            content=f"⛔ Hardcoded metrics detected: {examples}. "
+                                    "These values must be COMPUTED from data (df.sum(), df.mean(), etc.). "
+                                    "Variables persist in kernel — use them directly. "
+                                    "Execute quota NOT consumed.",
                             tool_call_id=tool_call_id,
                         )
 
                 # pdf.cell() check removed — PDF is now generated via HTML+weasyprint
                 # All numbers come from m[key] f-string interpolation in HTML template
 
-        logger.info("[Tool] %s(%s) phase=%s", name,
-                    {k: str(v)[:80] for k, v in args.items()},
-                    _phase if name == "execute" else "-")
+        logger.info("[Tool] %s(%s)", name,
+                    {k: str(v)[:80] for k, v in args.items()})
         result = handler(request)
 
         # Reset consecutive blocks on successful execute
@@ -512,27 +436,26 @@ def build_agent(
                 _last_execute_failed = True
                 if _correction_count < _MAX_CORRECTIONS:
                     _correction_count += 1
-                    suffix = (f"\n\n[Execute {_execute_count}/{_max_execute}, kalan: {remaining}]"
-                              f" 🔄 DÜZELTME DÖNGÜSÜ {_correction_count}/{_MAX_CORRECTIONS}"
-                              f" — DÜŞÜNCE yaz: ne fail etti, neden, nasıl düzelteceksin.")
+                    suffix = (f"\n\n[Execute {_execute_count}/{_max_execute}, remaining: {remaining}]"
+                              f" 🔄 CORRECTION {_correction_count}/{_MAX_CORRECTIONS}"
+                              f" — THINK: what failed, why, how to fix.")
                 else:
-                    suffix = (f"\n\n[Execute {_execute_count}/{_max_execute}, kalan: {remaining}]"
-                              f" ⛔ DÜZELTME LİMİTİ AŞILDI ({_MAX_CORRECTIONS} deneme)."
-                              f" Bu metriği ATLA, kullanıcıya bildir, kalan analizle devam et.")
+                    suffix = (f"\n\n[Execute {_execute_count}/{_max_execute}, remaining: {remaining}]"
+                              f" ⛔ CORRECTION LIMIT ({_MAX_CORRECTIONS} attempts)."
+                              f" SKIP this metric, inform user, continue with remaining analysis.")
             else:
                 if _last_execute_failed and has_validation_ok:
-                    # Correction succeeded
                     _last_execute_failed = False
                     _correction_count = 0
-                    suffix = f"\n\n[Execute {_execute_count}/{_max_execute}, kalan: {remaining}] ✅ Düzeltme başarılı."
+                    suffix = f"\n\n[Execute {_execute_count}/{_max_execute}, remaining: {remaining}] ✅ Correction succeeded."
                 else:
                     _last_execute_failed = False
-                    suffix = f"\n\n[Execute {_execute_count}/{_max_execute}, kalan: {remaining}]"
+                    suffix = f"\n\n[Execute {_execute_count}/{_max_execute}, remaining: {remaining}]"
                     if remaining <= 2:
-                        suffix += " ⚠️ Son execute'larını analiz+PDF tek script olarak kullan."
+                        suffix += " ⚠️ Last executes — combine analysis+PDF in single script."
 
-            # Always append DÜŞÜNCE reminder for ReAct enforcement
-            suffix += "\n💭 Sonraki adımdan ÖNCE → DÜŞÜNCE: [ne gözlemledin] → [ne yapacaksın] → [neden]"
+            # ReAct enforcement: THOUGHT reminder
+            suffix += "\n💭 Before next step → THOUGHT: [what you observed] → [what you will do] → [why]"
 
             result = ToolMessage(
                 content=content + suffix,

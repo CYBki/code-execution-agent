@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 def init_session():
     """Initialize Streamlit session state with all required keys.
 
-    - Creates SandboxManager and pre-warms Daytona sandbox in background thread
+    - Creates SandboxManager and pre-warms OpenSandbox in background thread
     - Registers atexit cleanup for sandbox stop
     - Sets up unique session_id for thread-based sandbox + checkpointer
     """
@@ -29,7 +29,7 @@ def init_session():
     st.session_state.setdefault("pending_html", [])
     st.session_state.setdefault("pending_charts", [])
 
-    # Generate unique session/thread ID for Daytona sandbox + checkpointer
+    # Generate unique session/thread ID for OpenSandbox + checkpointer
     st.session_state.setdefault("session_id", str(uuid.uuid4()))
 
     # Default HTML render height (Risk #3 fallback)
@@ -39,7 +39,7 @@ def init_session():
     if "sandbox_manager" not in st.session_state:
         st.session_state["sandbox_manager"] = SandboxManager()
 
-    # Pre-warm Daytona sandbox in background thread (Risk #2)
+    # Pre-warm OpenSandbox in background thread (Risk #2)
     if "sandbox_prewarm_done" not in st.session_state:
         st.session_state["sandbox_prewarm_done"] = True  # Set immediately to prevent re-entry
 
@@ -61,7 +61,7 @@ def init_session():
         ).start()
 
     # Register atexit cleanup to stop sandbox on session end
-    # Primary cleanup: Daytona auto_delete_interval=3600
+    # Primary cleanup: OpenSandbox sandbox timeout=2h
     # atexit is best-effort only — not guaranteed in Streamlit
     if "sandbox_cleanup_registered" not in st.session_state:
         st.session_state["sandbox_cleanup_registered"] = True

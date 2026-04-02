@@ -1,15 +1,27 @@
 #!/usr/bin/env python3
-"""Clean up stopped Daytona sandboxes to free disk space."""
+"""Clean up stopped OpenSandbox containers to free disk space."""
 
+import os
 import sys
-from daytona import Daytona, SandboxState
+
+import httpx
+from dotenv import load_dotenv
+
+load_dotenv()
+
+API_KEY = os.getenv("OPEN_SANDBOX_API_KEY", "")
+DOMAIN = os.getenv("OPEN_SANDBOX_DOMAIN", "localhost:8080")
+BASE_URL = f"http://{DOMAIN}" if not DOMAIN.startswith("http") else DOMAIN
+
 
 def main():
-    d = Daytona()
+    headers = {"OPEN-SANDBOX-API-KEY": API_KEY}
 
     print("Fetching sandbox list...")
-    result = d.list()
-    sandboxes = result.items if hasattr(result, 'items') else list(result)
+    resp = httpx.get(f"{BASE_URL}/v1/sandboxes", headers=headers, timeout=15)
+    resp.raise_for_status()
+    data = resp.json()
+    sandboxes = data.get("items", [])
 
     if not sandboxes:
         print("No sandboxes found.")
@@ -22,18 +34,18 @@ def main():
     active = []
 
     for s in sandboxes:
-        state = getattr(s, 'state', 'UNKNOWN')
-        labels = getattr(s, 'labels', {})
-        thread_id = labels.get('thread_id', 'no-thread-id')[:12]
+        sid = s.get("id", "?")
+        state = s.get("state", "UNKNOWN")
+        metadata = s.get("metadata", {})
+        thread_id = metadata.get("thread_id", "no-thread-id")[:12]
 
-        info = f"ID: {s.id[:12]}... | State: {state:15} | Thread: {thread_id}"
+        info = f"ID: {sid[:12]}... | State: {state:15} | Thread: {thread_id}"
 
-        if state in (SandboxState.STOPPED, SandboxState.ARCHIVED,
-                     SandboxState.ERROR, SandboxState.BUILD_FAILED):
-            stopped.append((s, info))
+        if state in ("stopped", "error", "exited"):
+            stopped.append((sid, info))
             print(f"  [DELETE] {info}")
         else:
-            active.append((s, info))
+            active.append((sid, info))
             print(f"  [KEEP]   {info}")
 
     print("-" * 80)
@@ -47,16 +59,14 @@ def main():
 
     print(f"\n⚠️  Will delete {len(stopped)} stopped sandbox(es).")
 
-    # Check for --yes flag
-    auto_confirm = '--yes' in sys.argv or '-y' in sys.argv
-
+    auto_confirm = "--yes" in sys.argv or "-y" in sys.argv
     if auto_confirm:
         print("Auto-confirming (--yes flag)")
-        confirm = 'y'
+        confirm = "y"
     else:
         confirm = input("Proceed? [y/N]: ").strip().lower()
 
-    if confirm != 'y':
+    if confirm != "y":
         print("Cancelled.")
         return
 
@@ -64,18 +74,19 @@ def main():
     deleted = 0
     failed = 0
 
-    for s, info in stopped:
+    for sid, info in stopped:
         try:
-            d.delete(s)
-            print(f"  ✅ Deleted: {s.id[:12]}...")
+            r = httpx.delete(f"{BASE_URL}/v1/sandboxes/{sid}", headers=headers, timeout=30)
+            r.raise_for_status()
+            print(f"  ✅ Deleted: {sid[:12]}...")
             deleted += 1
         except Exception as e:
-            print(f"  ❌ Failed: {s.id[:12]}... - {e}")
+            print(f"  ❌ Failed: {sid[:12]}... - {e}")
             failed += 1
 
     print("-" * 80)
     print(f"✅ Cleanup complete: {deleted} deleted, {failed} failed")
-    print("You can now create new sandboxes.")
+
 
 if __name__ == "__main__":
     main()

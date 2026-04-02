@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -14,6 +15,198 @@ logger = logging.getLogger(__name__)
 from src.agent.graph import get_or_build_agent
 from src.tools.artifact_store import get_store
 from src.ui.styles import get_tool_icon, get_tool_label
+
+
+def _detect_step_name(code: str) -> str:
+    """Detect step name from code content."""
+    code_lower = code.lower()
+
+    # 1. Data loading
+    if 'read_excel' in code_lower or 'read_csv' in code_lower or 'read_parquet' in code_lower:
+        return "📄 Loading Data"
+
+    # 2. Schema/columns check
+    if '.columns' in code_lower or '.dtypes' in code_lower or '.info()' in code_lower:
+        return "🔍 Schema Discovery"
+
+    # 3. Data cleaning
+    if any(x in code_lower for x in ['dropna', 'fillna', 'drop_duplicates', 'replace', 'strip()']):
+        return "🧹 Data Cleaning"
+
+    # 4. Datetime operations
+    if 'to_datetime' in code_lower or 'pd.datetime' in code_lower or 'datetime' in code_lower:
+        return "📅 Date Processing"
+
+    # 5. Statistical analysis
+    if any(x in code_lower for x in ['groupby', 'agg', 'pivot', 'describe', 'corr', 'mean', 'sum']):
+        return "📊 Statistical Analysis"
+
+    # 6. PDF generation
+    if 'weasyprint' in code_lower or 'write_pdf' in code_lower or 'html' in code_lower and 'pdf' in code_lower:
+        return "📑 PDF Generation"
+
+    # 7. Visualization
+    if any(x in code_lower for x in ['matplotlib', 'plt.', 'plotly', 'seaborn', 'fig.', 'plot(']):
+        return "📈 Visualization"
+
+    # 8. PowerPoint
+    if 'pptx' in code_lower or 'Presentation' in code:
+        return "🎞️ Presentation"
+
+    # 9. Validation/checks
+    if any(x in code_lower for x in ['assert', 'len(', '.shape', 'isna().sum', 'isnull().sum']):
+        return "✓ Validation"
+
+    # 10. DuckDB queries
+    if 'duckdb' in code_lower or 'read_csv_auto' in code_lower:
+        return "🦆 Database Query"
+
+    # Default
+    return "⚙️ Code Execution"
+
+
+class ExecuteStatusManager:
+    """Manages a single consolidated st.status() container for all execute tool calls with real-time updates."""
+
+    def __init__(self):
+        self._placeholder = None     # st.empty() placeholder for live updates
+        self._step_count = 0         # Number of execute steps so far
+        self._pending_call_ids = set()  # tool_call IDs waiting for results
+        self._has_error = False      # Whether any step had an error
+        self._steps_buffer = []      # Buffer of all steps for re-rendering
+        self._current_step_name = "⚙️ Code Execution"  # Current step's detected name
+        self._start_time = None      # Overall execution start time
+        self._total_time = 0         # Total execution time in seconds
+
+    @property
+    def is_active(self) -> bool:
+        """Whether the consolidated container is currently open."""
+        return self._placeholder is not None
+
+    def _render_current_state(self, state: str):
+        """Re-render the entire status container with current buffer."""
+        if self._placeholder is None:
+            return
+
+        # Determine label and spinner HTML based on state
+        if state == "running":
+            spinner_html = '<span class="rotating-spinner">⟳</span>'
+            label_text = f"{self._current_step_name} (Step {self._step_count}/~{self._step_count + 2})"
+            state_class = "status-running"
+        else:
+            # Completed state - no spinner
+            icon = "❌" if self._has_error else "✅"
+            spinner_html = icon
+            time_str = f", {self._total_time:.1f}s" if self._total_time > 0 else ""
+            label_text = f"Code Execution Complete ({self._step_count} steps{time_str})"
+            state_class = "status-error" if self._has_error else "status-complete"
+
+        # Use custom HTML for the header with rotating spinner
+        with self._placeholder.container():
+            # Render custom status header
+            st.markdown(f"""
+            <div class="execute-status-container {state_class}">
+                <div class="execute-status-header">
+                    {spinner_html} {label_text}
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            # Render collapsible details with st.expander
+            with st.expander("📋 View execution details", expanded=False):
+                for step_data in self._steps_buffer:
+                    step_name = step_data.get('step_name', 'Code Execution')
+                    duration = step_data.get('duration', 0)
+                    duration_str = f"  ({duration:.1f}s)" if duration > 0 else ""
+
+                    st.markdown(f"**Step {step_data['num']} · {step_name}**{duration_str}")
+                    st.code(step_data['code'], language="python")
+
+                    if step_data.get('output'):
+                        output = step_data['output']
+                        is_error = step_data.get('is_error', False)
+                        output_label = f"📤 Output" + (" ❌" if is_error else "")
+
+                        with st.expander(output_label, expanded=is_error):
+                            if is_error:
+                                st.error(output[:2000])
+                            else:
+                                st.text(output[:2000])
+
+    def add_execute_call(self, tool_call_id: str, code: str):
+        """Called when an AI message contains an execute tool_call."""
+        self._step_count += 1
+        self._pending_call_ids.add(tool_call_id)
+
+        # Detect step name from code
+        step_name = _detect_step_name(code)
+        self._current_step_name = step_name
+
+        if self._placeholder is None:
+            # First execute call - create placeholder
+            self._placeholder = st.empty()
+            self._start_time = time.time()
+
+        # Add step to buffer with detected name and start time
+        self._steps_buffer.append({
+            'num': self._step_count,
+            'code': code,
+            'tool_call_id': tool_call_id,
+            'output': None,
+            'is_error': False,
+            'step_name': step_name,
+            'start_time': time.time(),
+            'duration': 0,
+        })
+
+        # Re-render with running state
+        self._render_current_state("running")
+
+    def add_execute_result(self, tool_call_id: str, content: str):
+        """Called when a tool message with execute result arrives."""
+        self._pending_call_ids.discard(tool_call_id)
+
+        if self._placeholder is None:
+            return
+
+        is_error = "error" in content.lower() or "traceback" in content.lower()
+        if is_error:
+            self._has_error = True
+
+        # Find step in buffer and add output with duration
+        for step_data in self._steps_buffer:
+            if step_data['tool_call_id'] == tool_call_id:
+                step_data['output'] = content
+                step_data['is_error'] = is_error
+                # Calculate duration
+                if step_data.get('start_time'):
+                    step_data['duration'] = time.time() - step_data['start_time']
+                break
+
+        # Re-render with running state (more steps may come)
+        self._render_current_state("running")
+
+    def finalize(self):
+        """Close the container and switch to complete state."""
+        if self._placeholder is None:
+            return
+
+        # Calculate total time
+        if self._start_time:
+            self._total_time = time.time() - self._start_time
+
+        # Final render with complete state
+        final_state = "error" if self._has_error else "complete"
+        self._render_current_state(final_state)
+
+        # Reset for potential future use
+        self._placeholder = None
+        self._step_count = 0
+        self._pending_call_ids.clear()
+        self._has_error = False
+        self._steps_buffer = []
+        self._start_time = None
+        self._total_time = 0
 
 
 def _safe_extract_messages(node_output) -> list:
@@ -37,6 +230,54 @@ def _safe_extract_messages(node_output) -> list:
         return [messages] if messages else []
 
     return list(messages)
+
+
+def _render_execute_history(execute_steps: list[dict]):
+    """Render a consolidated block for execute steps from history."""
+    n = len(execute_steps)
+    has_error = any(
+        s.get("output") and ("error" in s["output"].lower() or "traceback" in s["output"].lower())
+        for s in execute_steps
+    )
+    icon = "❌" if has_error else "✅"
+    step_word = "steps" if n != 1 else "step"
+    state_class = "status-error" if has_error else "status-complete"
+
+    # Render custom status header for history
+    st.markdown(f"""
+    <div class="execute-status-container {state_class}">
+        <div class="execute-status-header">
+            {icon} Code Execution Complete ({n} {step_word})
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Render collapsible details
+    with st.expander("📋 View execution details", expanded=False):
+        for i, step in enumerate(execute_steps, 1):
+            code = step["input"].get("command", "") or step["input"].get("code", "")
+
+            # Detect step name from code
+            step_name = _detect_step_name(code) if code else "Code Execution"
+
+            if code:
+                st.markdown(f"**Step {i} · {step_name}**")
+                st.code(code, language="python")
+
+            output = step.get("output")
+            if output:
+                # Skip blocked messages
+                _blocked_markers = ("⛔", "BLOCKED", "already parsed", "not needed",
+                                    "Execute limit reached", "Shell command")
+                if any(m in output for m in _blocked_markers):
+                    continue
+
+                is_error = "error" in output.lower() or "traceback" in output.lower()
+                with st.expander(f"📤 Output" + (" ❌" if is_error else ""), expanded=is_error):
+                    if is_error:
+                        st.error(output[:2000])
+                    else:
+                        st.text(output[:2000])
 
 
 def _render_tool_call(tool_name: str, tool_input: dict, tool_output: str | None = None):
@@ -136,12 +377,13 @@ def _render_artifacts(html_list, charts_list, downloads_list, key_prefix=""):
             )
 
 
-def _process_stream_chunk(chunk, rendered_ids: set):
+def _process_stream_chunk(chunk, rendered_ids: set, exec_manager: ExecuteStatusManager):
     """Process a single stream chunk and render appropriate UI elements.
 
     Args:
         chunk: Stream chunk from LangGraph
         rendered_ids: Set of message IDs already rendered (prevents history replay)
+        exec_manager: Manager for consolidated execute status container
     """
     if not isinstance(chunk, dict):
         return
@@ -173,34 +415,43 @@ def _process_stream_chunk(chunk, rendered_ids: set):
 
                 # Render tool calls
                 for tc in tool_calls:
-                    _render_tool_call(
-                        tool_name=tc.get("name", "unknown"),
-                        tool_input=tc.get("args", {}),
-                    )
+                    tool_name = tc.get("name", "unknown")
+                    tool_input = tc.get("args", {})
+                    tool_call_id = tc.get("id")
+
+                    if tool_name == "execute":
+                        # Route execute calls to consolidated manager
+                        code = tool_input.get("command", "") or tool_input.get("code", "")
+                        if code and tool_call_id:
+                            exec_manager.add_execute_call(tool_call_id, code)
+                    else:
+                        # Non-execute tool: finalize any open execute container first
+                        exec_manager.finalize()
+                        _render_tool_call(tool_name=tool_name, tool_input=tool_input)
 
                 # Render text content (final answer)
                 if content and not tool_calls:
+                    # Finalize execute container before showing final answer
+                    exec_manager.finalize()
                     st.markdown(content)
 
             # Tool message — tool output
             elif msg_type == "tool":
                 tool_name = getattr(msg, "name", "")
                 tool_content = getattr(msg, "content", "") or ""
+                tool_call_id = getattr(msg, "tool_call_id", None)
 
-                # Show blocked tool calls as warnings in the UI
+                # Blocked tool calls: agent already gets feedback via ToolMessage.
+                # Don't show internal interceptor messages to the user.
                 _blocked_markers = ("⛔", "BLOCKED", "already parsed", "not needed",
                                     "Execute limit reached", "Shell command")
                 if any(m in tool_content for m in _blocked_markers):
-                    st.warning(f"🚫 Bloklandı: {tool_content[:200]}")
+                    logger.debug("Interceptor block (hidden from UI): %s", tool_content[:200])
                     continue
 
-                # Show successful execute output (for debugging/verification)
-                if tool_name == "execute" and tool_content:
-                    with st.expander("📤 Execute Output", expanded=False):
-                        if "error" in tool_content.lower() or "traceback" in tool_content.lower():
-                            st.error(tool_content[:2000])
-                        else:
-                            st.text(tool_content[:2000])
+                # Route execute results to consolidated manager
+                if tool_name == "execute" and tool_content and tool_call_id:
+                    exec_manager.add_execute_result(tool_call_id, tool_content)
 
                 # parse_file output (schema info)
                 elif tool_name == "parse_file" and tool_content:
@@ -220,13 +471,29 @@ def render_chat():
         content = msg["content"]
 
         with st.chat_message(role):
-            # Re-render stored tool call steps (with outputs)
-            for step in msg.get("steps", []):
-                _render_tool_call(
-                    tool_name=step["name"],
-                    tool_input=step["input"],
-                    tool_output=step.get("output"),  # Include tool output for history
-                )
+            # Re-render stored tool call steps (consolidating consecutive execute steps)
+            steps = msg.get("steps", [])
+            execute_buffer = []
+
+            for step in steps:
+                if step["name"] == "execute":
+                    # Buffer execute steps for consolidation
+                    execute_buffer.append(step)
+                else:
+                    # Flush any accumulated execute steps
+                    if execute_buffer:
+                        _render_execute_history(execute_buffer)
+                        execute_buffer = []
+                    # Render non-execute step individually
+                    _render_tool_call(
+                        tool_name=step["name"],
+                        tool_input=step["input"],
+                        tool_output=step.get("output"),
+                    )
+
+            # Flush remaining execute steps
+            if execute_buffer:
+                _render_execute_history(execute_buffer)
 
             if content:
                 st.markdown(content)
@@ -272,7 +539,7 @@ def render_chat():
         st.error(f"Agent oluşturulamadı: {e}")
         return
 
-    # Block until Daytona sandbox packages are installed (prevents race condition)
+    # Block until OpenSandbox is ready (prevents race condition)
     # Timeout is generous for first-ever sandbox (pip install), fast for reuse
     with st.spinner("⏳ Sandbox hazırlanıyor..."):
         ready = sandbox_manager.wait_until_ready(timeout=180)
@@ -302,6 +569,7 @@ def render_chat():
     with st.chat_message("assistant"):
         full_response = ""
         collected_steps = []  # Persist tool call steps for history
+        exec_manager = ExecuteStatusManager()  # Consolidated execute container manager
 
         # Track rendered message IDs (persist across queries in same session)
         if "_rendered_ids" not in st.session_state:
@@ -314,7 +582,7 @@ def render_chat():
                 config={"configurable": {"thread_id": session_id}},
                 stream_mode="updates",
             ):
-                _process_stream_chunk(chunk, rendered_ids)
+                _process_stream_chunk(chunk, rendered_ids, exec_manager)
 
                 # Collect tool calls + outputs for message history
                 # NOTE: No dedup here - we want ALL messages from current turn for persistence
@@ -349,7 +617,11 @@ def render_chat():
                                         step["output"] = tool_content
                                         break
 
+            # Finalize any open execute container after stream completes
+            exec_manager.finalize()
+
         except GraphRecursionError:
+            exec_manager.finalize()  # Close execute container before showing error
             st.warning(
                 "⚠️ Agent maksimum adım sayısına ulaştı (30 iterasyon). "
                 "Soruyu daha spesifik sormayı dene veya daha küçük bir veri seti yükle."
@@ -359,6 +631,7 @@ def render_chat():
                 "Lütfen soruyu daraltmayı deneyin."
             )
         except Exception as e:
+            exec_manager.finalize()  # Close execute container before showing error
             st.error(f"Agent hatası: {e}")
             full_response = f"Bir hata oluştu: {e}"
 

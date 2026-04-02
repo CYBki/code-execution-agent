@@ -5,13 +5,13 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "agentic-analyze-d"
 version = "0.1.0"
-description = "Data analysis agent with Deep Agents + Daytona sandbox"
+description = "Data analysis agent with Deep Agents + OpenSandbox"
 requires-python = ">=3.12"
 dependencies = [
     "deepagents",
     "langchain-anthropic>=1.4.0",
-    "langchain-daytona",
-    "daytona",
+    "opensandbox",
+    "opensandbox-code-interpreter",
     "streamlit>=1.40.0",
     "pandas",
     "openpyxl",
@@ -23,7 +23,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "ruff"]
+dev = ["pytest", "ruff", "mlflow[genai]>=2.18.0"]
 
 [tool.setuptools.packages.find]
 where = ["."]

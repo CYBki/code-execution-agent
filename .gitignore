@@ -26,6 +26,16 @@ env/
 .DS_Store
 Thumbs.db
 
+# LibreOffice lock files
+.~lock.*#
+
+# MLflow
+mlruns/
+.understand-anything/
+
+# Eval results
+tests/eval/results/
+
 # Data files (user uploads)
 *.xlsx
 *.xls
