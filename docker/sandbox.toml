@@ -1,9 +1,20 @@
+[server]
+host = "127.0.0.1"
+port = 8080
+log_level = "INFO"
+api_key = "local-sandbox-key-2024"
+max_sandbox_timeout_seconds = 86400
+
 [runtime]
 type = "docker"
+execd_image = "opensandbox/execd:v1.0.9"
 
-[runtime.docker]
-default_image   = "agentic-sandbox:v1"
-default_cpu     = "1"
-default_memory  = "2Gi"
-default_timeout = "1h"
-max_sandboxes   = 12
+[docker]
+network_mode = "bridge"
+default_image = "agentic-sandbox:v1"
+default_cpu = "1"
+default_memory = "2Gi"
+max_sandboxes = 12
+
+[ingress]
+mode = "direct"
