@@ -1,0 +1,9 @@
+[runtime]
+type = "docker"
+
+[runtime.docker]
+default_image   = "agentic-sandbox:v1"
+default_cpu     = "1"
+default_memory  = "2Gi"
+default_timeout = "1h"
+max_sandboxes   = 12
