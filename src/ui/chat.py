@@ -18,51 +18,77 @@ from src.ui.styles import get_tool_icon, get_tool_label
 
 
 def _detect_step_name(code: str) -> str:
-    """Detect step name from code content."""
+    """Detect step name from code content using priority-weighted scoring.
+
+    When a single execute block does multiple things (e.g. analysis + PDF),
+    the highest-priority detected operation wins.
+    """
     code_lower = code.lower()
 
-    # 1. Data loading
-    if 'read_excel' in code_lower or 'read_csv' in code_lower or 'read_parquet' in code_lower:
-        return "📄 Loading Data"
+    # (priority, label, detector)  — higher priority wins
+    _DETECTORS: list[tuple[int, str, bool]] = [
+        # --- Artifact generation (highest priority — final output) ---
+        (100, "📑 Generating PDF Report",
+         'weasyprint' in code_lower or 'write_pdf' in code_lower
+         or ('html' in code_lower and '.pdf' in code_lower)),
 
-    # 2. Schema/columns check
-    if '.columns' in code_lower or '.dtypes' in code_lower or '.info()' in code_lower:
-        return "🔍 Schema Discovery"
+        (95, "🎞️ Creating Presentation",
+         'pptx' in code_lower or 'Presentation' in code),
 
-    # 3. Data cleaning
-    if any(x in code_lower for x in ['dropna', 'fillna', 'drop_duplicates', 'replace', 'strip()']):
-        return "🧹 Data Cleaning"
+        # --- Dashboard data prep (JSON for generate_html) ---
+        (90, "🎯 Preparing Dashboard Data",
+         'json' in code_lower
+         and any(x in code_lower for x in ['value_counts', 'groupby', 'chart', 'dashboard', 'kpi'])),
 
-    # 4. Datetime operations
-    if 'to_datetime' in code_lower or 'pd.datetime' in code_lower or 'datetime' in code_lower:
-        return "📅 Date Processing"
+        # --- DuckDB (before generic analysis — more specific) ---
+        (85, "🦆 Running Database Query",
+         'duckdb' in code_lower or 'read_csv_auto' in code_lower),
 
-    # 5. Statistical analysis
-    if any(x in code_lower for x in ['groupby', 'agg', 'pivot', 'describe', 'corr', 'mean', 'sum']):
-        return "📊 Statistical Analysis"
+        # --- Visualization ---
+        (80, "📈 Creating Visualization",
+         any(x in code_lower for x in ['matplotlib', 'plt.savefig', 'plt.show', 'plotly', 'seaborn', 'sns.'])),
 
-    # 6. PDF generation
-    if 'weasyprint' in code_lower or 'write_pdf' in code_lower or 'html' in code_lower and 'pdf' in code_lower:
-        return "📑 PDF Generation"
+        # --- Data loading + cleaning combo (very common first execute) ---
+        (70, "📄 Loading & Cleaning Data",
+         any(x in code_lower for x in ['read_excel', 'read_csv', 'read_parquet'])
+         and any(x in code_lower for x in ['dropna', 'fillna', 'to_datetime', 'drop_duplicates'])),
 
-    # 7. Visualization
-    if any(x in code_lower for x in ['matplotlib', 'plt.', 'plotly', 'seaborn', 'fig.', 'plot(']):
-        return "📈 Visualization"
+        # --- Data loading only ---
+        (65, "📄 Loading Data",
+         any(x in code_lower for x in ['read_excel', 'read_csv', 'read_parquet'])),
 
-    # 8. PowerPoint
-    if 'pptx' in code_lower or 'Presentation' in code:
-        return "🎞️ Presentation"
+        # --- Statistical analysis ---
+        (60, "📊 Analyzing Data",
+         any(x in code_lower for x in ['groupby', '.agg(', 'pivot_table', 'describe()', '.corr('])),
 
-    # 9. Validation/checks
-    if any(x in code_lower for x in ['assert', 'len(', '.shape', 'isna().sum', 'isnull().sum']):
-        return "✓ Validation"
+        # --- Data cleaning only ---
+        (50, "🧹 Cleaning Data",
+         any(x in code_lower for x in ['dropna', 'fillna', 'drop_duplicates', 'astype(', 'replace('])),
 
-    # 10. DuckDB queries
-    if 'duckdb' in code_lower or 'read_csv_auto' in code_lower:
-        return "🦆 Database Query"
+        # --- Date processing (only if to_datetime is explicit, not just an import) ---
+        (45, "📅 Processing Dates",
+         'to_datetime' in code_lower or 'dt.month' in code_lower or 'dt.year' in code_lower
+         or 'resample(' in code_lower),
 
-    # Default
-    return "⚙️ Code Execution"
+        # --- Schema discovery ---
+        (40, "🔍 Exploring Schema",
+         any(x in code_lower for x in ['.dtypes', '.info()', '.columns'])
+         and 'read_' not in code_lower),
+
+        # --- Excel writing ---
+        (55, "💾 Saving Excel Output",
+         'to_excel' in code_lower or 'excelwriter' in code_lower),
+    ]
+
+    best_priority = -1
+    best_label = "⚙️ Processing"
+
+    for priority, label, matched in _DETECTORS:
+        if matched and priority > best_priority:
+            best_priority = priority
+            best_label = label
+
+    return best_label
 
 
 class ExecuteStatusManager:
