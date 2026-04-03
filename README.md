@@ -2,7 +2,7 @@
 
 Excel, CSV ve PDF dosyalarını analiz eden, otomatik PDF rapor üreten AI agent.
 
-**Stack:** LangChain `create_agent` + Anthropic Claude + Daytona sandbox + Streamlit
+**Stack:** LangChain `create_agent` + Anthropic Claude + OpenSandbox + Streamlit
 
 ---
 
@@ -10,7 +10,7 @@ Excel, CSV ve PDF dosyalarını analiz eden, otomatik PDF rapor üreten AI agent
 
 - Python 3.12+
 - [Anthropic API Key](https://console.anthropic.com/)
-- [Daytona API Key](https://app.daytona.io/) — sandbox çalıştırmak için
+- OpenSandbox — kod çalıştırma sandbox ortamı
 
 ---
 
@@ -32,7 +32,8 @@ pip install -e .
 cp .env.example .env
 # .env dosyasını aç ve anahtarları gir:
 #   ANTHROPIC_API_KEY=sk-ant-...
-#   DAYTONA_API_KEY=dtn_...
+#   OPEN_SANDBOX_API_KEY=...
+#   OPEN_SANDBOX_DOMAIN=...
 ```
 
 ---
@@ -98,13 +99,13 @@ agentic_analyze_d/
 │   │   ├── graph.py                # Agent kurulumu + smart_interceptor
 │   │   └── prompts.py              # Temel sistem prompt + kurallar
 │   ├── tools/
-│   │   ├── execute.py              # Daytona sandbox execute (base64 pattern)
+│   │   ├── execute.py              # OpenSandbox execute (base64 pattern)
 │   │   ├── file_parser.py          # parse_file tool
 │   │   ├── generate_html.py        # HTML dashboard tool
 │   │   ├── download_file.py        # PDF download tool
 │   │   └── artifact_store.py       # Thread-safe UI köprüsü
 │   ├── sandbox/
-│   │   └── manager.py              # Daytona sandbox yaşam döngüsü
+│   │   └── manager.py              # OpenSandbox yaşam döngüsü
 │   └── skills/
 │       ├── registry.py             # Skill tetikleyiciler (40MB eşiği vb.)
 │       └── loader.py               # Sistem prompt derleyici
@@ -129,20 +130,17 @@ agentic_analyze_d/
 | Değişken | Açıklama |
 |---|---|
 | `ANTHROPIC_API_KEY` | Claude modeline erişim |
-| `DAYTONA_API_KEY` | Sandbox oluşturma ve çalıştırma |
+| `OPEN_SANDBOX_API_KEY` | OpenSandbox API anahtarı |
+| `OPEN_SANDBOX_DOMAIN` | OpenSandbox sunucu adresi |
 
 ---
 
 ## Sorun Giderme
 
 **Sandbox başlamıyor:**
-Daytona API key'ini ve hesap diskini kontrol et (30GiB limit).
-```python
-from daytona import Daytona, SandboxState
-d = Daytona()
-for s in d.list().items:
-    if s.state == SandboxState.STOPPED:
-        d.delete(s)
+OpenSandbox API key ve domain ayarlarını kontrol et.
+```bash
+curl http://$OPEN_SANDBOX_DOMAIN/health
 ```
 
 **`ModuleNotFoundError: deepagents`:**
