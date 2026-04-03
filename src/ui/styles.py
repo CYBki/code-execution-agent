@@ -323,9 +323,42 @@ section[data-testid="stSidebar"] {
     background: #fafafa;
 }
 
+/* Sidebar text visibility on light background */
+section[data-testid="stSidebar"] .stMarkdown p,
+section[data-testid="stSidebar"] .stMarkdown h3,
+section[data-testid="stSidebar"] .stMarkdown h4,
+section[data-testid="stSidebar"] .stMarkdown strong {
+    color: #1e293b !important;
+}
+
+section[data-testid="stSidebar"] .stMarkdown small,
+section[data-testid="stSidebar"] [data-testid="stCaptionContainer"],
+section[data-testid="stSidebar"] [data-testid="stCaptionContainer"] p,
+section[data-testid="stSidebar"] [data-testid="stCaptionContainer"] small {
+    color: #475569 !important;
+}
+
+section[data-testid="stSidebar"] label,
+section[data-testid="stSidebar"] .stFileUploader label,
+section[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] span,
+section[data-testid="stSidebar"] .uploadedFileName {
+    color: #334155 !important;
+}
+
+section[data-testid="stSidebar"] hr {
+    border-color: #cbd5e1 !important;
+}
+
 section[data-testid="stSidebar"] .stButton > button {
     width: 100%;
     border-radius: 8px;
+    color: #1e293b !important;
+    border-color: #94a3b8 !important;
+}
+
+section[data-testid="stSidebar"] .stButton > button:hover {
+    background: #e2e8f0 !important;
+    border-color: #64748b !important;
 }
 </style>
 """
