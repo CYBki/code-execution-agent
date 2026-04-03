@@ -221,8 +221,9 @@ class ExecuteStatusManager:
         if self._start_time:
             self._total_time = time.time() - self._start_time
 
-        # Final render with complete state
-        final_state = "error" if self._has_error else "complete"
+        # Final render — if last step succeeded, agent corrected any earlier errors
+        last_step_error = self._steps_buffer[-1].get('is_error', False) if self._steps_buffer else False
+        final_state = "error" if last_step_error else "complete"
         self._render_current_state(final_state)
 
         # Reset for potential future use
@@ -261,13 +262,12 @@ def _safe_extract_messages(node_output) -> list:
 def _render_execute_history(execute_steps: list[dict]):
     """Render a consolidated block for execute steps from history."""
     n = len(execute_steps)
-    has_error = any(
-        s.get("output") and ("error" in s["output"].lower() or "traceback" in s["output"].lower())
-        for s in execute_steps
-    )
-    icon = "❌" if has_error else "✅"
+    # Check last step only — if agent corrected earlier errors, final result is success
+    last_output = execute_steps[-1].get("output", "") if execute_steps else ""
+    last_step_error = last_output and ("error" in last_output.lower() or "traceback" in last_output.lower())
+    icon = "❌" if last_step_error else "✅"
     step_word = "steps" if n != 1 else "step"
-    state_class = "status-error" if has_error else "status-complete"
+    state_class = "status-error" if last_step_error else "status-complete"
 
     # Render custom status header for history
     st.markdown(f"""
