@@ -66,17 +66,26 @@ print(f'df still here: {len(df):,} rows')
   Order value → `df.groupby('order_id')['amount'].sum().mean()` ✅  Row-level mean ❌
 - **Negative values**: Don't delete — first understand. Refund? Debit? Distinguish gross/net.
 - **Unique counting**: Use `.nunique()`, not `len()` or `count()`.
-- **Large combinations**: Product pair analysis (market basket, co-occurrence) → use sparse matrix + min_support threshold, NEVER limit by top-N:
+- **Large combinations (BLOCK: top-N scope reduction)**: Market basket, co-occurrence, pair analysis → include ALL items. SCOPE CHECK before writing code.
   ```python
-  # ❌ WRONG — arbitrary scope reduction:
-  top_products = df['item'].value_counts().head(100).index
-  df_filtered = df[df['item'].isin(top_products)]
-  
-  # ✅ CORRECT — all products, statistical filtering via min_support:
+  # ❌ BLOCK — these patterns are FORBIDDEN:
+  popular_items = df['item'].value_counts().head(50).index  # arbitrary top-N
+  df_filtered = df[df['item'].isin(popular_items)]           # shrinks analysis scope
+  # SQL: LIMIT 50 to select items for analysis                # same problem in SQL
+
+  # ✅ CORRECT — pandas + mlxtend (all items, statistical filter):
   from mlxtend.frequent_patterns import apriori, association_rules
-  basket = df.groupby(['invoice', 'item'])['qty'].sum().unstack(fill_value=0).map(lambda x: x > 0)
+  basket = df.groupby(['Invoice', 'StockCode'])['Quantity'].sum().unstack(fill_value=0)
+  basket = (basket > 0)  # binary encoding
   frequent = apriori(basket, min_support=0.005, use_colnames=True, low_memory=True)
   rules = association_rules(frequent, metric='lift', min_threshold=1.5)
+
+  # ✅ CORRECT — DuckDB (all items, HAVING filters result not input):
+  # Self-join on ALL items, then filter by min co-occurrence count
+  SELECT a.StockCode as item_a, b.StockCode as item_b, COUNT(*) as together
+  FROM clean a JOIN clean b ON a.Invoice = b.Invoice AND a.StockCode < b.StockCode
+  GROUP BY 1, 2
+  HAVING COUNT(*) >= 20  -- statistical threshold on OUTPUT, not input scope
   ```
 
 ## Analysis Quality

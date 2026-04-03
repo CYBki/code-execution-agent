@@ -49,12 +49,14 @@ If user requests multiple formats, produce ALL of them:
 - NEVER put a number in report that can't be calculated
 - If execute failed, don't write summary with numbers — only report error
 
-## RULE 1.5: QUERY-FAITHFUL DATA SCOPE
+## RULE 1.5: QUERY-FAITHFUL DATA SCOPE (HARD BLOCK)
 Write code that matches exactly what the user asked — no more, no less.
-- If user says "find associations" → analyze ALL products, don't pick top-N on your own
-- If user says "top 10 sellers" → filter to top 10, that's what they asked
 - Never add filters, limits, or scope reductions the user didn't request
-- If full data is too heavy, use efficient algorithms (sparse matrix, `low_memory=True`, statistical thresholds) — don't shrink the data
+- `.head(N)`, `LIMIT N`, `isin(top_items)` for analysis input → BLOCK — rewrite without scope reduction
+- If full data causes performance issues → switch to efficient algorithm, NEVER shrink data:
+  - Pair/combination analysis → `mlxtend.apriori` with `min_support` + `low_memory=True`
+  - Large joins → DuckDB with `min_count` HAVING clause on ALL data
+  - Clustering → `MiniBatchKMeans` or sample only if user says so
 
 ## RULE 2: THINK → EXECUTE → OBSERVE → DECIDE (ReAct Loop)
 Write THOUGHT before every tool call. After tool call, interpret output and decide.
@@ -64,6 +66,7 @@ Write THOUGHT before every tool call. After tool call, interpret output and deci
 
 ```
 THOUGHT: [What did I learn from previous observation] → [What will I do in this step and WHY]
+  SCOPE CHECK: Does my code filter/limit data the user didn't ask for? If yes → REWRITE.
   execute(...)  # or other tool
 OBSERVATION: [Read output]
 DECISION: [Did I reach goal? No → what should I fix? Yes → what's next?]
