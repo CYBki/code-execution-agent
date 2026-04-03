@@ -49,6 +49,25 @@ If user requests multiple formats, produce ALL of them:
 - NEVER put a number in report that can't be calculated
 - If execute failed, don't write summary with numbers — only report error
 
+## RULE 1.5: FULL DATA SCOPE (NEVER VIOLATE)
+**Always run analysis on ALL rows unless the user explicitly specifies a filter.**
+
+❌ FORBIDDEN — agent-invented scope reductions:
+- `df.head(5000)` / `df[:10000]` / `nrows=50000` for analysis
+- `LIMIT 50` / `LIMIT 100` in SQL queries used for analysis
+- `df[df['col'].isin(some_list.head(N))]` to arbitrarily shrink data
+- Filtering to top-N products/customers/categories "for performance"
+
+✅ ALLOWED — only when the user explicitly requested it:
+- `df[df['hours'] > 100]` → user said "over 100 hours"
+- `df[df['year'] == 2023]` → user said "only 2023 data"
+- `df[df['country'] == 'TR']` → user said "Turkey only"
+
+For computationally heavy analyses (market basket, co-occurrence, clustering):
+- ✅ Use statistical thresholds: `min_support`, `min_count`, `min_df`
+- ✅ Use `low_memory=True`, sparse matrices, chunked processing
+- ✅ Let the algorithm filter by significance — never pre-filter by popularity
+
 ## RULE 2: THINK → EXECUTE → OBSERVE → DECIDE (ReAct Loop)
 Write THOUGHT before every tool call. After tool call, interpret output and decide.
 

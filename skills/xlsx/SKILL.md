@@ -66,8 +66,18 @@ print(f'df still here: {len(df):,} rows')
   Order value → `df.groupby('order_id')['amount'].sum().mean()` ✅  Row-level mean ❌
 - **Negative values**: Don't delete — first understand. Refund? Debit? Distinguish gross/net.
 - **Unique counting**: Use `.nunique()`, not `len()` or `count()`.
-- **Large combinations**: Product pair analysis → filter popular items first:
-  `popular = df.groupby('col').size().pipe(lambda s: s[s > 50].index)`
+- **Large combinations**: Product pair analysis (market basket, co-occurrence) → use sparse matrix + min_support threshold, NEVER limit by top-N:
+  ```python
+  # ❌ WRONG — arbitrary scope reduction:
+  top_products = df['item'].value_counts().head(100).index
+  df_filtered = df[df['item'].isin(top_products)]
+  
+  # ✅ CORRECT — all products, statistical filtering via min_support:
+  from mlxtend.frequent_patterns import apriori, association_rules
+  basket = df.groupby(['invoice', 'item'])['qty'].sum().unstack(fill_value=0).map(lambda x: x > 0)
+  frequent = apriori(basket, min_support=0.005, use_colnames=True, low_memory=True)
+  rules = association_rules(frequent, metric='lift', min_threshold=1.5)
+  ```
 
 ## Analysis Quality
 
@@ -102,6 +112,11 @@ At the end of the report: what assumptions were made, which cleaning steps may a
 `.head(1000)`, `[:5000]`, `nrows=50000`, `nrows=5` → **FORBIDDEN**.
 `parse_file` already provides the schema — don't re-read with `nrows`.
 For display: `.head(10)`, `.most_common(20)` are fine.
+
+**Scope reduction FORBIDDEN** — never limit analysis to top-N items/products/categories:
+- ❌ `df[df['item'].isin(top_products.head(50))]` → misses real associations
+- ❌ `LIMIT 25` in SQL for analysis data (OK only for display/preview)
+- ✅ Use `min_support`, `min_count`, or `idf` thresholds — let statistics decide what's significant
 
 ### Validation (do it INSIDE the execute code)
 Don't waste a separate execute — append to the END of analysis code:
