@@ -18,8 +18,8 @@ Excel, CSV ve PDF dosyalarını analiz eden, otomatik PDF rapor üreten AI agent
 
 ```bash
 # 1. Repoyu klonla
-git clone https://github.com/<kullanici>/agentic_analyze_d.git
-cd agentic_analyze_d
+git clone https://github.com/SKYMOD-Team/code-execution-agent.git
+cd code-execution-agent
 
 # 2. Sanal ortam oluştur
 python3.12 -m venv .venv
@@ -60,7 +60,7 @@ Tarayıcıda `http://localhost:8501` açılır.
 ```
 Dosya yüklenir
     ↓
-Skill sistemi devreye girer (xlsx/csv/pdf + büyük dosya tespiti)
+Skill sistemi devreye girer (xlsx/csv/pdf/visualization)
     ↓
 parse_file → schema + boyut bilgisi
     ↓
@@ -77,6 +77,17 @@ Detaylar için:
 
 ---
 
+## Temel Kurallar
+
+| Kural | Açıklama |
+|---|---|
+| **Query-Faithful Scope** | Sorguya sadık kal — kullanıcı istemediği sürece veriyi kısma, filtre ekleme |
+| **Data Fabrication** | Hesaplanamayan sayıyı rapora koyma |
+| **Process ALL Data** | `head(1000)`, `nrows=5000` gibi kısayollar yasak |
+| **ReAct Loop** | Her adımda THOUGHT → EXECUTE → OBSERVE → DECIDE |
+
+---
+
 ## Proje Yapısı
 
 ```
@@ -85,7 +96,7 @@ agentic_analyze_d/
 ├── src/
 │   ├── agent/
 │   │   ├── graph.py                # Agent kurulumu + smart_interceptor
-│   │   └── prompts.py              # Temel sistem prompt
+│   │   └── prompts.py              # Temel sistem prompt + kurallar
 │   ├── tools/
 │   │   ├── execute.py              # Daytona sandbox execute (base64 pattern)
 │   │   ├── file_parser.py          # parse_file tool
@@ -103,8 +114,9 @@ agentic_analyze_d/
 │   │   └── references/
 │   │       ├── large_files.md      # ≥40MB DuckDB pattern
 │   │       └── multi_file_joins.md # Çoklu dosya JOIN
-│   ├── csv/SKILL.md
-│   └── pdf/SKILL.md
+│   ├── csv/SKILL.md                # CSV/TSV kuralları, DuckDB pattern
+│   ├── pdf/SKILL.md                # PDF parsing kuralları
+│   └── visualization/SKILL.md      # Grafik ve görselleştirme kuralları
 ├── pyproject.toml                  # Bağımlılıklar
 ├── ARCHITECTURE.md                 # Sistem mimarisi
 └── TECHNICAL_GUIDE.md              # Teknik rehber
