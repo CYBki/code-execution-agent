@@ -319,38 +319,30 @@ CUSTOM_CSS = """
 }
 
 /* ── Sidebar styling (dark background) ── */
-section[data-testid="stSidebar"] .stMarkdown p,
-section[data-testid="stSidebar"] .stMarkdown h3,
-section[data-testid="stSidebar"] .stMarkdown h4,
-section[data-testid="stSidebar"] .stMarkdown strong {
+[data-testid="stSidebar"] p,
+[data-testid="stSidebar"] h1,
+[data-testid="stSidebar"] h2,
+[data-testid="stSidebar"] h3,
+[data-testid="stSidebar"] h4,
+[data-testid="stSidebar"] span,
+[data-testid="stSidebar"] label,
+[data-testid="stSidebar"] strong,
+[data-testid="stSidebar"] div.stMarkdown *,
+[data-testid="stSidebar"] small {
     color: #e2e8f0 !important;
 }
 
-section[data-testid="stSidebar"] .stMarkdown small,
-section[data-testid="stSidebar"] [data-testid="stCaptionContainer"],
-section[data-testid="stSidebar"] [data-testid="stCaptionContainer"] p,
-section[data-testid="stSidebar"] [data-testid="stCaptionContainer"] small {
-    color: #94a3b8 !important;
-}
-
-section[data-testid="stSidebar"] label,
-section[data-testid="stSidebar"] .stFileUploader label,
-section[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] span,
-section[data-testid="stSidebar"] .uploadedFileName {
-    color: #cbd5e1 !important;
-}
-
-section[data-testid="stSidebar"] hr {
+[data-testid="stSidebar"] hr {
     border-color: #374151 !important;
 }
 
-section[data-testid="stSidebar"] .file-badge {
+[data-testid="stSidebar"] .file-badge {
     background: #1e293b !important;
     border: 1px solid #334155 !important;
     color: #93c5fd !important;
 }
 
-section[data-testid="stSidebar"] .stButton > button {
+[data-testid="stSidebar"] button {
     width: 100%;
     border-radius: 8px;
 }
