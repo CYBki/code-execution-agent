@@ -13,7 +13,7 @@ You are an expert at working with CSV/TSV files efficiently.
 1. DISCOVERY  → parse_file(file)  ← does NOT consume execute budget, always FIRST STEP
 2. CLEANING   → execute(read + clean + print summary)
 3. ANALYSIS   → execute(df already in memory — analysis + validation)
-4. REPORT     → execute(metrics dict + weasyprint PDF) → generate_html → download_file
+4. REPORT     → execute(metrics dict + weasyprint PDF) → execute(publish_html(dashboard)) → download_file
 ```
 
 ## Persistent Kernel — Variables Are Preserved

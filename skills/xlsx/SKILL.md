@@ -33,7 +33,7 @@ No fixed phase order — adapt to the user's query. Typical sequence:
 4. REPORT (analysis + PDF in single script)
    THOUGHT: [Which metrics to include in report]
    → execute(compute from df + metrics dict + weasyprint PDF + validate)
-   → generate_html(dashboard)
+   → execute(build HTML dashboard with real data + publish_html(html))
    → download_file(PDF)
    → Give user a SHORT summary (general findings — do NOT repeat specific numbers)
 ```
@@ -167,35 +167,27 @@ m = {
 ```
 Analysis and PDF generation MUST be completed in a **single execute**.
 
-### SELF-CHECK: Before generate_html() (MANDATORY)
+### Dashboard Generation — USE publish_html() INSIDE execute()
 
-⚠️ **`generate_html()` runs in a SEPARATE process — it cannot access Python variables.**
-You must build the complete HTML string inside execute() and pass it as a literal to generate_html().
+`publish_html(html_string)` is pre-loaded in the persistent kernel.
+Call it inside your execute() code to render dashboards with **direct variable access**.
 
 **Variables persist across execute() calls (persistent kernel):**
 - m dict computed in execute #1 → available in execute #2+ ✅
 - df loaded in execute #1 → available in execute #2+ ✅
 
-**But generate_html() is NOT an execute — it's a separate tool:**
-- generate_html(html_code=html) → html must be a complete string, not a variable reference
-
-**Correct pattern:**
+**Correct pattern — publish_html inside execute (guaranteed real data):**
 ```python
-# Execute: build HTML string using persisted variables (df, m already in kernel)
+# Execute: build HTML using persisted variables (df, m already in kernel)
 m = {'total_orders': df['Invoice'].nunique(), ...}  # df from previous execute
 monthly_data = df.groupby('month')['revenue'].sum().tolist()
 
-html = f'''
-<h3>{m['total_orders']:,}</h3>
-<script>const data = {monthly_data};</script>
-'''
-generate_html(html_code=html)  # Pass literal string — OK
+html = f'<h3>{m["total_orders"]:,}</h3><script>const data = {monthly_data};</script>'
+publish_html(html)  # ✅ Auto-rendered in UI, no separate tool call needed
 ```
 
-**If user reports empty dashboard/PDF:**
-1. Recognize: "generate_html() cannot access Python variables directly"
-2. Build complete HTML string with data embedded inside execute()
-3. Then pass the string to generate_html()
+**RULE:** For any dashboard that uses analysis results → ALWAYS use `publish_html()` inside `execute()`.
+Only use `generate_html()` tool for purely static HTML with zero data dependency.
 
 ## Quick Start
 

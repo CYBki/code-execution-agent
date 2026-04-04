@@ -132,7 +132,8 @@ plt.close()
 
 ## Interactive Charts (HTML — Plotly.js)
 
-Use `generate_html` tool. No file save needed — renders in browser iframe.
+For data-driven charts: use `publish_html(html)` inside `execute()` — direct variable access, no hardcoding.
+For static example charts with no analysis data: use `generate_html` tool.
 
 ### Interactive Bar Chart
 
@@ -243,8 +244,8 @@ ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f'{x/1000:.0f}K'))
 
 | Need | Tool | Why |
 |------|------|-----|
-| Interactive chart (zoom, hover, filter) | `generate_html` + Plotly.js | Runs in browser, full interactivity |
+| Interactive chart with analysis data | `execute()` + `publish_html()` + Plotly.js | Direct variable access, no hardcoding |
 | Publication-quality static chart | `create_visualization` + matplotlib | High DPI PNG, precise control |
 | Quick exploration chart | `create_visualization` + seaborn | Clean defaults, fast |
-| Dashboard with multiple panels | `generate_html` + CSS Grid + Plotly | Full layout control |
-| Simple inline table | `generate_html` + HTML/CSS | Styled, sortable |
+| Dashboard with multiple panels | `execute()` + `publish_html()` + CSS Grid + Plotly | Full layout control, real data |
+| Static HTML (no data dependency) | `generate_html` + HTML/CSS | Simple, no kernel needed |
