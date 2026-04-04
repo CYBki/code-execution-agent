@@ -179,32 +179,30 @@ Call it inside your execute() code to render dashboards with **direct variable a
 - hourly_pattern from execute #4 → available in dashboard step ✅
 - Even across separate tool-call rounds — kernel NEVER resets
 
-**⛔ ABSOLUTE BAN — Never create new dicts/lists with literal numbers for dashboard:**
+**⛔ ABSOLUTE BAN — Never create new dicts/lists with literal numbers (ANY domain):**
 ```python
-# ❌ FORBIDDEN — copying numbers from previous output
-dashboard_metrics = {'total_customers': 5863, 'total_revenue': 17588623}  # HARDCODED!
-segment_data = [{'name': 'Champions', 'customers': 508}]  # HARDCODED!
-hourly_data = [{'hour': 6, 'revenue': 890000}]  # FABRICATED!
+# ❌ ANY of these patterns are FORBIDDEN — regardless of data domain
+any_metrics = {'key1': 5863, 'key2': 17588623}  # HARDCODED!
+any_data = [{'name': 'X', 'value': 508}]  # HARDCODED!
+any_series = [890000, 1200000, 950000]  # FABRICATED!
 ```
 
-**✅ CORRECT — Reference kernel variables directly:**
+**✅ CORRECT — Reference kernel variables directly (works for ANY data):**
 ```python
-# Dashboard step — m, segment_summary, country_analysis, hourly_pattern in kernel
-seg = segment_summary.reset_index()
-seg_names = seg['customer_segment'].tolist()
-seg_revs = seg['toplam_ciro'].tolist()
-c_names = country_analysis['Country'].tolist()[:8]
-c_revs = country_analysis['toplam_ciro'].tolist()[:8]
-h_labels = hourly_pattern.index.astype(int).tolist()
-h_vals = hourly_pattern['ciro'].tolist()
+# Dashboard step — df_result, m, summary_df etc. from previous execute
+# Step 1: Extract from kernel using DataFrame operations
+labels = df_result['category_col'].tolist()  # ✅ .tolist()
+values = df_result['metric_col'].tolist()  # ✅ .tolist()
+kpi = m['some_key']  # ✅ dict reference
 
+# Step 2: Embed in HTML
 parts = []
-parts.append(f'<div>{m["total_customers"]:,}</div>')
-parts.append(f'<script>const seg={seg_names};const segR={seg_revs};</script>')
+parts.append(f'<div class="kpi">{kpi:,}</div>')
+parts.append(f'<script>const labels={labels};const data={values};</script>')
 publish_html('\\n'.join(parts))  # ✅ Real data, auto-rendered
 ```
 
-**SELF-CHECK:** If you're about to write a number literal (5863, 9802691) → STOP → that variable is in the kernel → use it.
+**SELF-CHECK:** If you're about to write ANY number literal → STOP → that variable is in the kernel → use `.tolist()` or `m['key']`.
 
 **RULE:** For any dashboard that uses analysis results → ALWAYS use `publish_html()` inside `execute()`.
 Use kernel variables directly. Only use `generate_html()` for purely static HTML with zero data dependency.

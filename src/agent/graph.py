@@ -207,39 +207,62 @@ def build_agent(
                     tool_call_id=tool_call_id,
                 )
 
-            # Detect hardcoded chart/dashboard data (integrity check)
-            # Catches: list/dict assignments that look like fake data
+            # Detect hardcoded dashboard data (SCENARIO-INDEPENDENT)
+            # Instead of checking specific variable names, detect the PATTERN:
+            # publish_html present + dict/list literals with large numbers + NO data access ops
             import re
-            hardcoded_patterns = [
-                r"(top_\w+_data|hourly_distribution|monthly_data|chart_data|product_names|category_labels|customer_names)\s*=\s*\[(?:['\"]\[\w\s\]+['\"],?\s*){3,}\]",  # ['Product A', 'Product B', ...]
-                r"(top_\w+_revenue|sales_data|revenue_data|amounts|values|totals)\s*=\s*\[\d+,?\s*\d+,?\s*\d+",  # [100000, 80000, 60000]
-                # Dict literals with metric-like keys (dashboard_metrics = {...})
-                r"(dashboard_metrics|dashboard_data|kpi_data|metrics_dict)\s*=\s*\{",
-                # List-of-dict literals for chart data (segment_data = [{...}])
-                r"(segment_data|category_data|country_data|hourly_data|daily_data|monthly_data|product_data)\s*=\s*\[",
-            ]
-            if any(re.search(pattern, cmd, re.IGNORECASE) for pattern in hardcoded_patterns):
-                # Check if it's really hardcoded (not .tolist(), .reset_index(), from analysis)
-                data_access = (".tolist()", ".values", "groupby", ".reset_index()",
-                               ".to_dict(", ".iloc[", ".loc[", "duckdb.sql")
-                if not any(da in cmd for da in data_access):
-                    logger.warning("[Tool] WARNING: Potential hardcoded dashboard data detected")
+            _data_access_ops = (".tolist()", ".values", "groupby", ".reset_index()",
+                                ".to_dict(", ".iloc[", ".loc[", "duckdb.sql",
+                                ".sum()", ".mean()", ".count()", ".nunique()",
+                                ".sort_values(", ".nlargest(", ".nsmallest(",
+                                ".apply(", ".agg(", ".pivot")
+            _has_data_access = any(da in cmd for da in _data_access_ops)
+
+            if not _has_data_access and "publish_html" in cmd:
+                # Dashboard code WITHOUT any data access → likely hardcoded
+                # Check for dict literals with numbers ≥3 digits: var = {...1234...}
+                _dict_with_nums = re.search(r'\w+\s*=\s*\{[^}]*\b\d{3,}\b[^}]*\}', cmd)
+                # Check for list-of-dict literals: var = [{...1234...}]
+                _list_dicts_nums = re.search(r'\w+\s*=\s*\[\s*\{[^\]]*\b\d{3,}\b', cmd)
+                # Check for list of large numbers: var = [1234, 5678, 9012]
+                _list_of_nums = re.search(r'\w+\s*=\s*\[\d{3,}(?:\s*,\s*\d{3,}){2,}', cmd)
+
+                if _dict_with_nums or _list_dicts_nums or _list_of_nums:
+                    logger.warning("[Tool] BLOCKED: hardcoded data in publish_html dashboard")
                     _execute_count -= 1  # Don't count
                     return ToolMessage(
                         content="⚠️ HARDCODED DASHBOARD DATA DETECTED\n\n"
-                                "You are creating variables with literal numbers like:\n"
-                                "  dashboard_metrics = {'total_customers': 5863, ...}  ❌\n"
-                                "  segment_data = [{'name': 'X', 'customers': 508}]  ❌\n"
-                                "  hourly_data = [{'hour': 6, 'revenue': 890000}]  ❌\n\n"
-                                "❌ This is HARDCODED/FABRICATED DATA. Dashboard will be WRONG.\n\n"
-                                "✅ USE KERNEL VARIABLES from previous execute steps:\n"
-                                "  seg = segment_summary.reset_index()\n"
-                                "  seg_names = seg['customer_segment'].tolist()\n"
-                                "  seg_revs = seg['toplam_ciro'].tolist()\n"
-                                "  # m dict, country_analysis, hourly_pattern — all in kernel\n\n"
-                                "REMEMBER: Variables persist in kernel across ALL execute calls.\n"
-                                "Access them directly — NEVER copy numbers from output.\n\n"
-                                "Rewrite using kernel variables. Execute quota NOT consumed.",
+                                "Your dashboard code contains dict/list literals with numeric values\n"
+                                "but NO DataFrame operations (.tolist(), .values, .reset_index(), etc.).\n\n"
+                                "❌ This means you are COPYING numbers from memory instead of using kernel variables.\n\n"
+                                "✅ FIX: Use kernel variables directly. They persist across ALL execute calls:\n"
+                                "  # Extract data from kernel DataFrames/dicts:\n"
+                                "  labels = df_result['column'].tolist()\n"
+                                "  values = df_result['metric'].tolist()\n"
+                                "  kpi_value = m['key_name']  # m dict from previous step\n\n"
+                                "  # Then embed in HTML:\n"
+                                "  parts.append(f'<script>const data={values};</script>')\n"
+                                "  publish_html('\\n'.join(parts))\n\n"
+                                "REMEMBER: ALL variables from previous execute steps are still in kernel.\n"
+                                "Rewrite using .tolist()/.values on kernel variables. Execute quota NOT consumed.",
+                        tool_call_id=tool_call_id,
+                    )
+
+            # Also block hardcoded data even WITHOUT publish_html (PDF, generate_html scenarios)
+            if not _has_data_access:
+                _dict_with_nums = re.search(r'\w+\s*=\s*\{[^}]*\b\d{4,}\b[^}]*\}', cmd)
+                _list_dicts_nums = re.search(r'\w+\s*=\s*\[\s*\{[^\]]*\b\d{4,}\b', cmd)
+                _list_of_nums = re.search(r'\w+\s*=\s*\[\d{4,}(?:\s*,\s*\d{4,}){2,}', cmd)
+                if _dict_with_nums or _list_dicts_nums or _list_of_nums:
+                    logger.warning("[Tool] BLOCKED: hardcoded data literals (no publish_html)")
+                    _execute_count -= 1
+                    return ToolMessage(
+                        content="⚠️ HARDCODED DATA DETECTED\n\n"
+                                "Your code contains dict/list literals with large numbers\n"
+                                "but NO DataFrame operations (.tolist(), .groupby(), etc.).\n\n"
+                                "❌ Numbers must be COMPUTED from data, not copied from memory.\n\n"
+                                "✅ Use kernel variables: m['key'], df.groupby(...)['col'].sum().tolist()\n"
+                                "Execute quota NOT consumed.",
                         tool_call_id=tool_call_id,
                     )
 
@@ -399,20 +422,15 @@ def build_agent(
                 # pdf.cell() check removed — PDF is now generated via HTML+weasyprint
                 # All numbers come from m[key] f-string interpolation in HTML template
 
-            # --- Hardcoded metric variable check (runs for ALL execute, not just PDF) ---
+            # --- Hardcoded metric variable check (SCENARIO-INDEPENDENT) ---
+            # Detects: any_variable = large_number (>1000) without data ops
+            # Works for ANY domain: revenue, salary, temperature, stock_price, etc.
             if _total_blocked >= _MAX_BLOCKED:
                 logger.info("[Tool] Skipping variable assignment check (blocked %d times)", _total_blocked)
-            else:
-                # Block hardcoded metric variable assignments
-                # Detect: total_revenue = 8832003 (literal number, not from data)
-                metric_keywords = (
-                    "revenue", "customer", "order", "vip",
-                    "potential", "spend", "profit", "sales",
-                    "ciro", "musteri", "siparis",
-                )
+            elif not _has_data_access:
                 # Safe variable patterns: UI/formatting constants + config
                 safe_patterns = (
-                    # UI/PDF formatting — MUST be fixed constants (Rule 3 Clarification)
+                    # UI/PDF formatting — MUST be fixed constants
                     "font", "size", "spacing", "margin", "width", "height",
                     "padding", "indent", "line_h", "cell_h", "col_w",
                     "page_", "title_", "header_", "row_h",
@@ -425,15 +443,17 @@ def build_agent(
                     "_count_", "batch", "chunk", "n_items", "n_rows",
                     # Chart config (not data)
                     "color", "label", "opacity", "border", "radius",
+                    # Loop/index vars
+                    "idx", "index", "step", "i_", "j_", "k_",
                 )
+                # Find: var = large_number (≥1000) on its own line
                 hardcoded_vars = re.findall(
                     r'^(\w+)\s*=\s*(\d[\d,]*\.?\d*)\s*(?:#.*)?$', cmd, re.MULTILINE
                 )
                 fabricated = [
                     (var, val) for var, val in hardcoded_vars
-                    if any(kw in var.lower() for kw in metric_keywords)
-                    and not any(sp in var.lower() for sp in safe_patterns)
-                    and float(val.replace(',', '')) > 100  # config constants are small
+                    if not any(sp in var.lower() for sp in safe_patterns)
+                    and float(val.replace(',', '')) >= 1000  # Only large numbers are suspicious
                 ]
                 if fabricated:
                     examples = [f"{v}={n}" for v, n in fabricated[:3]]
@@ -441,9 +461,9 @@ def build_agent(
                     _execute_count -= 1
                     _total_blocked += 1
                     return ToolMessage(
-                        content=f"⛔ Hardcoded metrics detected: {examples}. "
-                                "These values must be COMPUTED from data or taken from kernel variables. "
-                                "Variables persist in kernel — use m['total_revenue'], segment_summary, etc. "
+                        content=f"⛔ Hardcoded metrics detected: {examples}.\n"
+                                "These values must be COMPUTED from data or taken from kernel variables.\n"
+                                "Variables persist in kernel — use variable references directly.\n"
                                 "Execute quota NOT consumed.",
                         tool_call_id=tool_call_id,
                     )

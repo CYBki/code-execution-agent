@@ -195,41 +195,52 @@ const revenueData = {top_products_revenue};  // ✅ From analysis
 '''
 ```
 
-## RULE 3.5: ABSOLUTE BAN ON HARDCODED DASHBOARD DATA
+## RULE 3.5: ABSOLUTE BAN ON HARDCODED DASHBOARD DATA (ANY SCENARIO)
 
-**THIS IS THE #1 MOST CRITICAL RULE FOR DASHBOARDS.**
+**THIS IS THE #1 MOST CRITICAL RULE FOR DASHBOARDS AND PDF REPORTS.**
 
-When building a dashboard with `publish_html()`, you MUST reference kernel variables directly.
+When building a dashboard with `publish_html()` or a PDF with weasyprint,
+you MUST reference kernel variables directly — regardless of the data domain.
+This rule applies to ALL scenarios: retail, HR, finance, IoT, healthcare, etc.
+
 You must NEVER create new dicts/lists by copying numbers you saw in previous output.
 
-❌ **BANNED PATTERN — Copying numbers from output into new variables:**
+❌ **BANNED PATTERN — Creating variables with literal numbers (ANY domain):**
 ```python
-# Dashboard step — THIS IS ABSOLUTELY FORBIDDEN
-dashboard_metrics = {'total_customers': 5863, 'total_revenue': 17588623}  # ❌ HARDCODED!
-segment_data = [{'name': 'Champions', 'customers': 508, 'revenue': 9802691}]  # ❌ HARDCODED!
-hourly_data = [{'hour': 6, 'revenue': 890000}, {'hour': 7, 'revenue': 1200000}]  # ❌ FABRICATED!
+# Retail example — FORBIDDEN
+metrics = {'total_customers': 5863, 'total_revenue': 17588623}  # ❌
+segment_data = [{'name': 'Champions', 'count': 508}]  # ❌
+
+# HR example — EQUALLY FORBIDDEN
+stats = {'total_employees': 1250, 'avg_salary': 75000}  # ❌
+dept_data = [{'dept': 'Engineering', 'headcount': 340}]  # ❌
+
+# Finance example — EQUALLY FORBIDDEN
+portfolio = {'total_assets': 5200000, 'roi': 12.5}  # ❌
+stock_data = [{'ticker': 'AAPL', 'return': 15.3}]  # ❌
 ```
 
-✅ **CORRECT — Use kernel variables directly in the SAME execute that calls publish_html():**
+✅ **CORRECT — Use kernel variables directly (works for ANY domain):**
 ```python
-# Dashboard step — variables m, segment_summary, hourly_pattern already in kernel
-seg = segment_summary.reset_index()
-seg_names = seg['customer_segment'].tolist()
-seg_revenues = seg['toplam_ciro'].tolist()
-country_names = country_analysis['Country'].tolist()[:8]
-country_revs = country_analysis['toplam_ciro'].tolist()[:8]
-hourly_labels = hourly_pattern.index.astype(int).tolist()
-hourly_vals = hourly_pattern['ciro'].tolist()
+# Dashboard step — df_result, m, summary_df etc. already in kernel from previous execute
+# Step 1: Extract data using DataFrame operations
+labels = df_result['category_column'].tolist()  # ✅ .tolist() from kernel variable
+values = df_result['metric_column'].tolist()  # ✅ .tolist() from kernel variable
+kpi_value = m['some_key']  # ✅ Reference to kernel dict
 
+# Step 2: Build HTML with extracted data
 parts = []
-parts.append(f'<script>const segNames={seg_names};const segRevs={seg_revenues};</script>')
-publish_html('\\n'.join(parts))
+parts.append(f'<div class="kpi">{kpi_value:,}</div>')
+parts.append(f'<script>const labels={labels};const data={values};</script>')
+publish_html('\\n'.join(parts))  # ✅ Real data
 ```
 
-**WHY THIS MATTERS:**
-- Hardcoded numbers can be WRONG (rounded, truncated, or fabricated)
-- The kernel has the EXACT computed values — use them
-- If a variable doesn't exist, COMPUTE it first in the same execute — don't invent approximate values
+**THE PRINCIPLE:** In dashboard/PDF step, EVERY number must come from either:
+1. `.tolist()` / `.values` on a kernel DataFrame/Series
+2. `m['key']` reference to a kernel dict
+3. A computation in the SAME execute (e.g., `df['col'].sum()`)
+
+NEVER from a literal you typed or copied from previous output.
 
 **KERNEL CONFIDENCE — TRUST THE SYSTEM:**
 
@@ -239,10 +250,9 @@ This includes across separate tool-call rounds. You do NOT need defensive progra
 ✅ **TRUST — These variables persist forever within the session:**
 - DataFrame `df` from Execute #1 → available in Execute #5, #6, #7, even #10
 - Dict `m` from Execute #3 → available in Execute #7 (dashboard step)
-- DataFrame `segment_summary` from Execute #3 → available in dashboard step
-- DataFrame `country_analysis` from Execute #5 → available in dashboard step
+- ANY DataFrame or dict from ANY execute → available in ALL future executes
 - All imports persist (pandas, numpy, duckdb)
-- Even variables from a DIFFERENT tool-call round persist (the kernel never resets)
+- The kernel NEVER resets during a conversation
 
 ❌ **NEVER re-create data as literals:**
 ```python
@@ -296,39 +306,34 @@ First tool is always `parse_file(file)` — doesn't consume execute quota, retur
 `publish_html(html_string)` is pre-loaded in kernel. Call it inside your execute() code to render dashboards.
 This guarantees real data because you have direct access to all kernel variables.
 
-✅ **CORRECT — Dashboard inside execute (direct variable access):**
+✅ **CORRECT — Dashboard inside execute (direct variable access, ANY domain):**
 ```python
-# Execute — Dashboard: m, segment_summary, country_analysis, hourly_pattern from previous steps
+# Execute — Dashboard: m, df_result, summary_df etc. from previous steps
 # Step 1: Extract data from kernel variables (NOT from memory/output!)
-seg = segment_summary.reset_index()
-seg_names = seg['customer_segment'].tolist()
-seg_revs = seg['toplam_ciro'].tolist()
-c_names = country_analysis['Country'].tolist()[:8]
-c_revs = country_analysis['toplam_ciro'].tolist()[:8]
-h_labels = hourly_pattern.index.astype(int).tolist()
-h_vals = hourly_pattern['ciro'].tolist()
+labels = df_result['category_col'].tolist()  # ✅ .tolist() from kernel
+values = df_result['metric_col'].tolist()  # ✅ .tolist() from kernel
+kpi1 = m['key1']  # ✅ dict reference from kernel
+kpi2 = m['key2']  # ✅ dict reference from kernel
 
 # Step 2: Build HTML with Chart.js using REAL data from variables above
 parts = []
 parts.append('<html><head><script src="https://cdn.jsdelivr.net/npm/chart.js"></script></head><body>')
-parts.append(f'<div class="kpi">{m["total_customers"]:,} Customers</div>')
-parts.append(f'<script>const segLabels={seg_names};const segData={seg_revs};</script>')
-parts.append(f'<script>const countryLabels={c_names};const countryData={c_revs};</script>')
-parts.append(f'<script>const hourLabels={h_labels};const hourData={h_vals};</script>')
+parts.append(f'<div class="kpi">{kpi1:,}</div>')
+parts.append(f'<script>const chartLabels={labels};const chartData={values};</script>')
 parts.append('</body></html>')
 publish_html('\\n'.join(parts))  # ✅ Auto-rendered in UI
 ```
 
-❌ **WRONG — Creating new variables with literal numbers:**
+❌ **WRONG — Creating new variables with literal numbers (ANY domain):**
 ```python
 # ABSOLUTELY FORBIDDEN — numbers copied from previous output
-dashboard_metrics = {'total_customers': 5863, 'total_revenue': 17588623}  # ❌
-segment_data = [{'name': 'X', 'customers': 508}]  # ❌
-hourly_data = [{'hour': 6, 'revenue': 890000}]  # ❌ FABRICATED!
+any_metrics = {'key': 5863, 'key2': 17588623}  # ❌ HARDCODED
+any_list = [{'name': 'X', 'value': 508}]  # ❌ HARDCODED
+any_series = [890000, 1200000, 950000]  # ❌ FABRICATED
 ```
 
 **RULE:** For any dashboard that uses analysis results → ALWAYS use `publish_html()` inside `execute()`.
-Use kernel variables directly (m, segment_summary, country_analysis, hourly_pattern, etc.).
+Use kernel variables directly with `.tolist()` / `.values` / `m['key']`.
 Only use `generate_html()` tool for purely static HTML with zero data dependency.
 
 ## File Access
