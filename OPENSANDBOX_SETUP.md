@@ -1,5 +1,10 @@
 # OpenSandbox Kurulum ve Geçiş Rehberi
 
+> **📋 Status: TAMAMLANDI**  
+> **Geçiş Tarihi:** Nisan 2026  
+> **Sonuç:** OpenSandbox başarıyla kuruldu, persistent kernel çalışıyor.  
+> Bu doküman kurulum ve geçiş referansı amaçlıdır.
+
 **Tarih:** 1 Nisan 2026  
 **Amaç:** Daytona Cloud'dan OpenSandbox'a (self-hosted) geçiş planı.
 
@@ -396,8 +401,7 @@ docker system prune -a -f --volumes
 
 # Eski sandbox dosyalarını sil (7 günden eski)
 find /tmp -name "sandbox-*" -mtime +7 -delete 2>/dev/null
-find /home/daytona -name "*.pkl" -mtime +7 -delete 2>/dev/null
-find /home/daytona -name "*.csv" -mtime +7 -delete 2>/dev/null
+find /home/sandbox -name "*.csv" -mtime +7 -delete 2>/dev/null  # DuckDB temp files
 
 # OpenSandbox log rotation (30 günden eski)
 find /var/log -name "*opensandbox*" -mtime +30 -delete 2>/dev/null
