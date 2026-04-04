@@ -664,7 +664,7 @@ but manually calling `d.delete()` is needed when disk limit is hit.
 Execute #1 (read + clean):         Execute #2 (analyze):
   df = pd.read_excel(path)           # df STILL in memory from Execute #1
   df.dropna(...)                     m = {'total': df['col'].nunique()}
-  print(f"✅ {len(df)} rows")        print(f"✅ Metrics: {m}")
+  print(f"✅ {len(df)} rows")        print(f"✅ m: {list(m.keys())}")
      │
      └── df persists in kernel ──▶  Execute #3 (PDF):
                                      # Both df and m STILL available
@@ -895,7 +895,7 @@ execute("df['InvoiceDate'] = pd.to_datetime(...)")  ← English code
 
 **Trade-off:**
 - ✅ Zero hallucination risk (numbers must be calculated)
-- ✅ Easy to verify: print(m) before PDF generation
+- ✅ Easy to verify: print(list(m.keys())) before PDF generation
 - ❌ Slightly verbose (could use individual variables)
 
 ---

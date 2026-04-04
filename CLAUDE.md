@@ -46,7 +46,7 @@ m = {
     'total_customers': df['CustomerID'].nunique(),
     'total_revenue': (df['Quantity'] * df['Price']).sum(),
 }
-print(f"✅ Metrics calculated: {m}")
+print(f"✅ Metrics computed: {len(m)} keys: {list(m.keys())}")  # Print KEYS only, NOT values!
 
 # Execute #3: Both df and m are STILL available
 html = f"""<h3>Customers: {m['total_customers']:,}</h3>"""

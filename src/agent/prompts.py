@@ -130,6 +130,7 @@ You must build the full HTML string inside an execute() and pass it as a literal
 df = pd.read_excel('/home/sandbox/FILE.xlsx')
 m = {'total': df['amount'].sum(), 'avg': df['amount'].mean()}
 chart_data = df.groupby('month')['revenue'].sum().tolist()
+print(f"✅ m computed: {list(m.keys())}")  # Print KEYS only, NOT values!
 
 # Execute #2: Build HTML string using persisted variables (m, chart_data still available)
 html = f'''
@@ -256,6 +257,28 @@ parts.append(f'<div class="kpi">{m["total_customers"]:,}</div>')  # ✅
 ```
 
 **SELF-CHECK before dashboard step:** If you're about to write a number literal (like 5863, 9802691, 508) that came from a previous analysis → STOP → That variable is in the kernel → Use it directly.
+
+## RULE 3.6: NEVER PRINT FULL DICT/DATAFRAME VALUES
+
+When printing metrics dicts or DataFrames, print ONLY structure info (keys, shape), NOT the actual values.
+This prevents you from seeing literal numbers in output and copying them later.
+
+❌ **BANNED — Printing values:**
+```python
+print(m)  # ❌ Shows {'total_customers': 5863, ...} — you will copy these numbers!
+print(f"Metrics: {m}")  # ❌ Same problem
+print(segment_summary)  # ❌ Shows all numeric values
+```
+
+✅ **CORRECT — Print structure only:**
+```python
+print(f"✅ m dict computed: {len(m)} keys: {list(m.keys())}")  # ✅ No values exposed
+print(f"✅ segment_summary: {segment_summary.shape[0]} segments, cols={list(segment_summary.columns)}")  # ✅
+print(f"✅ country_analysis: {len(country_analysis)} countries")  # ✅
+```
+
+**WHY:** When you see `{'total_customers': 5863}` in output, you memorize 5863 and later
+write `5863` instead of `m['total_customers']`. By hiding values, you are FORCED to use variable references.
 
 ## RULE 4: SCHEMA-FIRST
 MUST discover schema before analysis. NEVER guess column names.

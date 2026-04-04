@@ -48,7 +48,7 @@ m = {
     'total_revenue':   (df['Quantity'] * df['Price']).sum(),
     'avg_orders':      df.groupby('Customer ID')['Invoice'].nunique().mean(),
 }
-print(f"✅ Metrikler: {m}")
+print(f"✅ Metrikler: {len(m)} key: {list(m.keys())}")  # Sadece key'ler, değerler değil!
 ```
 
 ```python
