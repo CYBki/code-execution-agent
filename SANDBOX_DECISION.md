@@ -1,5 +1,10 @@
 # Sandbox Stratejisi — Karar Dokümanı
 
+> **📋 Status: TAMAMLANDI**  
+> **Karar:** OpenSandbox seçildi ve projeye entegre edildi (Nisan 2026).  
+> **Sonuç:** Persistent CodeInterpreter kernel ile değişkenler execute'lar arası korunur, pickle ihtiyacı ortadan kalktı.  
+> Bu doküman tarihsel referans amaçlıdır.
+
 **Tarih:** 1 Nisan 2026  
 **Amaç:** Agentic Analyze projesini kullanıcılara açarken hangi sandbox altyapısını kullanacağımıza karar vermek.
 

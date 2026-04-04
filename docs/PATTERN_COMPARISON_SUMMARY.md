@@ -14,7 +14,7 @@
 |---|:---:|:---:|:---:|
 | **Multi-turn conversations** | ✅ Her turn bağımsız | ❌ Cache loss, plan regeneration | 🟢 **ReAct** |
 | **Dynamic file strategy** | ✅ 40MB+ adaptive | ⚠️ Replan gerekir | 🟢 **ReAct** |
-| **Execute isolation** | ✅ Observation-driven | ❌ Plan'da model etmek zor | 🟢 **ReAct** |
+| **Persistent kernel awareness** | ✅ Observation-driven | ❌ Plan'da kernel state tracking zor | 🟢 **ReAct** |
 | **Error recovery** | ✅ Correction loop (max 2) | ⚠️ Replan costly | 🟢 **ReAct** |
 | **Tool chaining önleme** | ✅ Interceptor blocks | ✅ Plan sequential | 🟡 **Tie** |
 | **LLM call efficiency** | ⚠️ Her step reasoning | ✅ Planning + execution | 🟠 **P&E** |
@@ -41,15 +41,16 @@ Turn 2: "Aylık trend?"
 
 ReAct'te bu problem yok: Her turn bağımsız loop, agent cached.
 
-### 🔴 Execute Isolation
+### 🟡 Persistent Kernel State Tracking
 
 ```python
 # Plan-and-Execute planner diyor ki:
 Step 2: df = pd.read_excel(...)
-Step 3: m = calculate_metrics(df)  # ❌ df undefined (ayrı subprocess)
+Step 3: m = calculate_metrics(df)  # ✅ df mevcut (persistent kernel)
+                                   # Ama planner'ın df'in scope'unu bilmesi gerekir
 ```
 
-ReAct'te LLM her execute sonrası observe ediyor, bir sonraki execute'u buna göre şekillendiriyor.
+Persistent kernel ile değişkenler korunur, ancak ReAct'te LLM her execute sonrası observe ediyor, kernel state'ini biliyor. Plan-and-Execute'da bu visibility daha zayıf.
 
 ### 🔴 Dynamic File Strategy
 
@@ -81,7 +82,7 @@ Plan-and-Execute: Planner zaten plan üretti (file size bilinmeden) → Replan g
 
 - [x] Tool chaining (parse_file → ls döngüleri) → Circuit breaker
 - [x] Infinite loops → MAX_CONSECUTIVE_BLOCKS=2
-- [x] Multi-turn scope narrowing → pd.read_pickle() block in early executes
+- [x] Multi-turn scope narrowing → Kernel state clean per turn
 - [x] Execute quota waste → Smart blocking (ls, sampling, duplicate parse_file)
 - [x] Hardcoded metrics → Variable assignment check
 - [x] Font issues → Auto-fix Arial/Helvetica → DejaVu

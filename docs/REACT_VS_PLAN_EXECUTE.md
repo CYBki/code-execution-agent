@@ -29,19 +29,19 @@ GÖZLEM: [columns, dtypes, preview]
     ↓
 DÜŞÜNCE: "Şimdi veriyi okuyup temizlemeliyim"
     ↓
-Tool Call: execute(pd.read_excel + clean + to_pickle)
+Tool Call: execute(pd.read_excel + clean)
     ↓
-GÖZLEM: [401,604 satır, ✅ Doğrulama OK]
+GÖZLEM: [401,604 satır, ✅ Doğrulama OK, df bellekte]
     ↓
 DÜŞÜNCE: "Analiz yapıp PDF oluşturmalıyım"
     ↓
-Tool Call: execute(read_pickle + analysis + weasyprint PDF)
+Tool Call: execute(df hala bellekte + analysis + weasyprint PDF)
     ↓
 GÖZLEM: [✅ PDF: 127 KB]
     ↓
 KARAR: "PDF hazır, kullanıcıya sun"
     ↓
-Tool Call: download_file('/home/daytona/rapor.pdf')
+Tool Call: download_file('/home/sandbox/rapor.pdf')
 ```
 
 **Özet:** Her adım sonrası LLM değerlendirme yapar, dinamik kararlar alır.
@@ -51,7 +51,7 @@ Tool Call: download_file('/home/daytona/rapor.pdf')
 | Avantaj | Açıklama | Önem |
 |---|---|---|
 | **Dynamic error recovery** | Execute fail olursa LLM sorunu analiz eder, düzeltir | 🔴 Critical |
-| **Multi-turn independence** | Her soru bağımsız ReAct loop başlatır, pickle scope narrowing önlenir | 🔴 Critical |
+| **Multi-turn independence** | Her soru bağımsız ReAct loop başlatır, kernel state clean | 🟡 Important |
 | **Adaptive strategy** | parse_file sonrası file_size_mb görülünce 40MB+ → CSV strategy | 🟡 Important |
 | **Granular control** | Her tool call smart_interceptor'dan geçer, blocklar anında apply | 🟡 Important |
 | **Natural conversation** | Turkish prompt'lar ile DÜŞÜNCE → GÖZLEM akışı | 🟢 Nice-to-have |
@@ -79,9 +79,9 @@ User Query → Planner Agent (LLM)
     ↓
 PLAN:
   Step 1: parse_file(file) → get schema
-  Step 2: execute(read + clean + pickle)
-  Step 3: execute(analysis + validate)
-  Step 4: execute(pickle + PDF generation)
+  Step 2: execute(read + clean, df bellekte kalır)
+  Step 3: execute(analysis + validate, df hala bellekte)
+  Step 4: execute(PDF generation, df ve m mevcut)
   Step 5: download_file(pdf)
     ↓
 Executor Agent (Sequential)
@@ -146,8 +146,8 @@ Turn 1: "Müşteri sayısı nedir?"
 Turn 2: "Aylık trend grafiği"
   → Planner: Yeni plan ÜRETMELİ (previous plan scope narrowed)
   → Agent cache'i yenilemeli mi? (fingerprint change)
-  → Turn 1'in pickle'ı kullansa scope narrowing problemi
-  → Fresh Excel okusa execution overhead
+  → Kernel state Turn 1'den kaldıysa namespace kirliliği riski
+  → Fresh başlatmak daha güvenli ama overhead
 ```
 
 **Sonuç:** Multi-turn için ReAct daha uygun. Her turn bağımsız loop, cache korunur.
@@ -182,43 +182,37 @@ Planner: "User query + file metadata" → Plan üret
 
 **Sonuç:** ReAct'te adaptive strategy doğal, Plan-and-Execute'da costly.
 
-### 3.3 Execute Isolation Pattern
+### 3.3 Persistent Kernel Pattern
 
-**Teknik gerçek:**
+**Teknik gerçek (OpenSandbox):**
 
-Her `execute()` ayrı Python subprocess → değişkenler persist etmez.
+`execute()` çağrıları **persistent CodeInterpreter kernel**'da çalışır → değişkenler persist eder.
 
-**ReAct handling:**
+**ReAct handling (artık daha basit):**
 
 ```python
-# Execute 1 (agent aware: sonraki execute'da değişken yok)
-df.to_pickle('/home/daytona/clean.pkl')
+# Execute 1: yükle + temizle
+df = pd.read_excel('/home/sandbox/data.xlsx')
+df = df.dropna(subset=['CustomerID'])
+# df bellekte kalır, pickle gerekmez
 
-# Execute 2 (agent pickle'dan okuyacağını biliyor)
-df = pd.read_pickle('/home/daytona/clean.pkl')
+# Execute 2: df HALA bellekte
+m = {'customers': df['CustomerID'].nunique(), ...}
 ```
 
-**Plan-and-Execute risk:**
+**Plan-and-Execute durumu:**
+
+Persistent kernel ile execute isolation sorunu ortadan kalktı. Ancak Plan-and-Execute'da hala bir risk var:
 
 ```
 Plan:
   Step 2: execute(df = pd.read_excel(...); df_clean = df.dropna())
   Step 3: execute(m = calculate_metrics(df_clean))
-                                         ^^^^^^^^^^^
-                                         NameError: df_clean not defined
 ```
 
-**Neden?** Planner, execute isolation'ı modellemiyor. ReAct'te her execute sonrası LLM gözlem yapıyor, bir sonraki execute'u buna göre şekillendiriyor.
+Bu **artık çalışır** (persistent kernel), ancak plan oluşturma aşamasında Planner'ın df_clean'in mevcut olduğunu bilmesi gerekir.
 
-**Çözüm:** Plan-and-Execute'da execute isolation'ı prompt'a inject etmek gerekir:
-
-```
-RULE: Each execute is isolated. Pass data via:
-- Pickle: df.to_pickle('/home/daytona/X.pkl') → pd.read_pickle()
-- CSV: df.to_csv('/home/daytona/X.csv') → duckdb.read_csv_auto()
-```
-
-Ama bu ReAct'te zaten mevcut ve doğal flow'da öğreniliyor.
+**ReAct avantajı:** Her execute sonrası LLM gözlem yapıyor, kernel state'ini biliyor. Plan-and-Execute'da bu visibility daha zayıf.
 
 ---
 
@@ -235,7 +229,7 @@ Mevcut ReAct implementasyonunda **smart_interceptor** katmanı, tool call'ları 
 | `urllib`, `requests`, `wget` | Network yasak | Security |
 | `nrows > 10` | Sampling yasak | Data fabrication önlenir |
 | Duplicate `parse_file` | Schema zaten var | ⛔ + circuit breaker |
-| `pd.read_pickle()` in execute #1-2 | Multi-turn scope narrowing | 🔴 Critical fix |
+| ~~`pd.read_pickle()` in execute #1-2~~ | ~~Multi-turn scope narrowing~~ | ✅ N/A (persistent kernel) |
 
 ### 4.2 Interceptor'un Auto-Fix'lediği Pattern'ler
 
