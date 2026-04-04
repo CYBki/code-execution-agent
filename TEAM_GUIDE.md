@@ -18,10 +18,9 @@ Excel, CSV ve PDF dosyalarını analiz eden, sonuçları **PDF rapor** veya **in
 | **UI** | Streamlit | Hızlı prototipleme, dosya upload built-in, `st.download_button` |
 | **LLM** | Claude Sonnet 4 (Anthropic) | Uzun context, güçlü kod üretme, Türkçe |
 | **Agent framework** | LangChain `create_agent` + LangGraph | ReAct döngüsü, MemorySaver, middleware stack |
-| **Kod çalıştırma** | Daytona sandbox | İzole ortam — kullanıcı kodu local process'i patlatamaz |
+| **Kod çalıştırma** | OpenSandbox | İzole ortam + persistent kernel — değişkenler execute'lar arası korunur |
 | **Büyük dosya** | DuckDB | 40MB+ Excel'i pandas'a yüklemeden SQL ile sorgular |
 | **PDF üretimi** | WeasyPrint | HTML/CSS → PDF, Türkçe karakter sorunu yok |
-| **Küçük dosya geçici store** | Pickle | Execute'lar arası DataFrame taşıma, dtype koruması |
 
 ---
 
@@ -45,7 +44,7 @@ Excel, CSV ve PDF dosyalarını analiz eden, sonuçları **PDF rapor** veya **in
           ┌─────────────────────┼──────────────┐
           ▼         ▼           ▼              ▼
     parse_file   execute   generate_html  download_file
-    (LOCAL)     (DAYTONA)   (BROWSER)     (DAYTONA)
+    (LOCAL)     (SANDBOX)   (BROWSER)     (SANDBOX)
                     │
                     ▼
              ArtifactStore
@@ -69,12 +68,12 @@ init_session()
     ├── SandboxManager() oluşturulur
     └── Background thread (_prewarm):
         ├── get_or_create_sandbox(session_id)
-        │   ├── Daytona'da label=thread_id olan sandbox var mı?
+        │   ├── OpenSandbox'ta session_id olan sandbox var mı?
         │   │   ├── VAR  → state kontrol et, STOPPED ise start()
-        │   │   └── YOK  → create(TTL=3600s)
+        │   │   └── YOK  → create(TTL=7200s)
         └── _install_packages() (daemon thread):
-            ├── Phase 1: DejaVuSans fontlarını /home/daytona/'ya kopyala (~1s)
-            ├── Phase 2: Eksik critical paketleri kur (weasyprint, pandas, openpyxl...) (~30s)
+            ├── Phase 1: DejaVuSans fontlarını /home/sandbox/'a kopyala (~1s)
+            ├── Phase 2: Pre-installed paketleri verify (weasyprint, pandas, openpyxl...) (~5s)
             ├── Phase 3: Verify → import weasyprint, pandas, openpyxl
             └── _packages_ready.set()  ← HER ZAMAN finally'de
 ```
@@ -110,27 +109,27 @@ agent.stream(query, stream_mode="updates")
 
 ② execute("""
    import pandas as pd
-   df = pd.read_excel('/home/daytona/data.xlsx')
+   df = pd.read_excel('/home/sandbox/data.xlsx')
    df.dropna(subset=['Customer ID'], inplace=True)
-   df.to_pickle('/home/daytona/clean.pkl')
-   print(df.shape)
+   print(f"✅ Yüklendi: {len(df):,} satır")
+   # df bellekte persist eder, pickle gerekmez
    """)
-   → veriyi temizle + pickle'a yaz
+   → veriyi yükle + temizle
 
 ③ execute("""
-   import pandas as pd, weasyprint, os
-   df = pd.read_pickle('/home/daytona/clean.pkl')
+   # df HALA bellekte — persistent kernel sayesinde
+   import weasyprint, os
    m = {
        'customers': df['Customer ID'].nunique(),
        'revenue':   (df['Quantity'] * df['Price']).sum(),
    }
    html = f'<html>...<b>{m["customers"]:,}</b>...</html>'
-   weasyprint.HTML(string=html).write_pdf('/home/daytona/rapor.pdf')
-   print(f"PDF: {os.path.getsize('/home/daytona/rapor.pdf')//1024} KB")
+   weasyprint.HTML(string=html).write_pdf('/home/sandbox/rapor.pdf')
+   print(f"✅ PDF: {os.path.getsize('/home/sandbox/rapor.pdf')//1024} KB")
    """)
-   → analiz + PDF TEK execute'da
+   → df hala mevcut, analiz + PDF TEK execute'da
 
-④ download_file('/home/daytona/rapor.pdf')
+④ download_file('/home/sandbox/rapor.pdf')
    → sandbox'tan binary oku → ArtifactStore.add_download()
    → UI'da st.download_button belirir
 ```
@@ -143,17 +142,24 @@ agent.stream(query, stream_mode="updates")
 
 ② execute("""
    import pandas as pd
-   xls = pd.ExcelFile('/home/daytona/large.xlsx')
+   xls = pd.ExcelFile('/home/sandbox/large.xlsx')
+   csv_paths = {}
    for sheet in xls.sheet_names:
-       df = pd.read_excel('/home/daytona/large.xlsx', sheet_name=sheet)
-       df.to_csv(f'/home/daytona/temp_{sheet}.csv', index=False)
+       df = pd.read_excel('/home/sandbox/large.xlsx', sheet_name=sheet)
+       csv_path = f'/home/sandbox/temp_{sheet}.csv'
+       df.to_csv(csv_path, index=False)
+       csv_paths[sheet] = csv_path
        del df  # RAM serbest bırak
+   print(f"✅ CSV'ler hazır: {csv_paths}")
+   # csv_paths persistent kernel'da bellekte kalır
    """)
    → her sheet ayrı CSV olarak diske yazılır
 
 ③ execute("""
+   # csv_paths HALA bellekte — persistent kernel sayesinde
    import duckdb, weasyprint, os
-   csv_paths = {'Sheet1': '/home/daytona/temp_Sheet1.csv', ...}
+   # Robust kod için path'leri açıkça yazabiliriz:
+   # csv_paths = {'Sheet1': '/home/sandbox/temp_Sheet1.csv', ...}
 
    # UNION ALL ile tüm dönemsel veriler birleştirilir
    union = " UNION ALL ".join(
@@ -164,28 +170,36 @@ agent.stream(query, stream_mode="updates")
    m = {'customers': int(stats[0]), 'revenue': float(stats[1])}
    # ... HTML + PDF üret
    """)
-   → analiz + PDF TEK execute'da (csv_paths yeniden tanımlanır!)
+   → csv_paths hala mevcut, analiz + PDF TEK execute'da
 ```
 
-**Neden csv_paths yeniden tanımlanır?** Execute izolasyonu — her execute ayrı bir Python subprocess'tir. Execute #1'deki değişkenler Execute #2'de yoktur. Değişkenler arası veri disk üzerinden (pickle/csv) taşınır.
+**Not:** Persistent kernel ile csv_paths Execute #1'den Execute #2'ye taşınır. Ancak robust kod için path'leri açıkça yazmak iyi pratik (kernel restart durumunda güvenli).
 
 ---
 
-## 5. Execute İzolasyonu — Kritik Tasarım Kararı
+## 5. Persistent Kernel — Kritik Tasarım Kararı
 
 ```
 Agent process (tek process, LLM)
     │
-    ├── execute() #1 → python3 /tmp/_run_abc.py (PID 1234) → biter, ölür
-    ├── execute() #2 → python3 /tmp/_run_def.py (PID 5678) → biter, ölür
-    └── execute() #3 → python3 /tmp/_run_ghi.py (PID 9012) → biter, ölür
+    └── OpenSandbox CodeInterpreter (persistent kernel)
+        │
+        ├── execute() #1 → df yükle, temizle
+        │                   df, imports, değişkenler bellekte KALIR
+        ├── execute() #2 → df HALA mevcut → analiz
+        │                   m dict hesapla, bellekte KALIR
+        └── execute() #3 → df ve m HALA mevcut → PDF üret
 ```
 
-Execute'lar arası veri aktarımı için 2 yöntem:
+**Önemli:** `execute()` çağrıları **aynı persistent Python kernel**'da çalışır. Değişkenler, imports, DataFrames execute'lar arası **otomatik korunur** — pickle/disk gerekmez.
 
-| Yöntem | Kullanım | Avantaj |
+**İstisna:** `generate_html()` **ayrı process**'te çalışır, Python değişkenlerini göremez. HTML string'i execute içinde tamamen oluştur, sonra `generate_html()`'e literal olarak geç.
+
+Büyük dosyalar için hala DuckDB stratejisi kullanılır:
+
+| Strateji | Kullanım | Avantaj |
 |---|---|---|
-| **Pickle** | <40MB, pandas analizi | 5x daha hızlı okuma, dtype koruması |
+| **Persistent Kernel** | <40MB, pandas analizi | Değişkenler persist eder, hızlı |
 | **CSV + DuckDB** | ≥40MB | Disk'ten lazy query, bellek patlamaz |
 
 ### Base64 Temp File Mekanizması
@@ -233,7 +247,7 @@ loader.py → compose_system_prompt()
 ```
 
 **Skill dosyaları** (`skills/` klasörü):
-- `xlsx/SKILL.md` — pickle pattern, m dict, WeasyPrint kuralları
+- `xlsx/SKILL.md` — persistent kernel pattern, m dict, WeasyPrint kuralları
 - `xlsx/references/large_files.md` — DuckDB pattern, UNION ALL, sheet CSV dönüşümü
 - `xlsx/references/multi_file_joins.md` — JOIN pattern, VLOOKUP → SQL
 - `csv/SKILL.md` — CSV okuma kuralları
@@ -258,7 +272,7 @@ LLM'ler bazen verimli olmayan veya tehlikeli kod üretir. `smart_interceptor`, `
    → "Paketler pre-installed: pandas, openpyxl, weasyprint..."
 
 ❌ urllib / requests / wget / curl
-   → "Sandbox'tan dış ağ erişimi yasak. Fontlar zaten /home/daytona/'da"
+   → "Sandbox'tan dış ağ erişimi yasak. Fontlar zaten /home/sandbox/'da"
 
 ❌ nrows > 10
    → "TÜM veriyi oku — sampling yasak"
@@ -350,23 +364,18 @@ SandboxManager._ensure_started():
 ```
 
 **TTL sistemi:**
-- `auto_delete_interval=3600` → 1 saat idle sandbox otomatik silinir
+- `auto_delete_interval=7200` → 2 saat idle sandbox otomatik silinir
 - `atexit.register(mgr.stop)` → process kapanınca sandbox durdurulur
 - "🔄 New Conversation" → eski sandbox stop, yeni SandboxManager, yeni prewarm
 
-**Disk limiti (30GiB) dolduğunda:**
-Daytona 30GiB disk limiti var. Stopped sandbox'lar disk tutar. Temizlemek için:
-```bash
-python cleanup_sandboxes.py --yes
-```
-Script stopped/archived/error sandbox'ları siler, active olanları korur. Detay: [cleanup_sandboxes.py](cleanup_sandboxes.py)
+**Disk yönetimi:**
+Docker container'lar disk kaplar. Kullanılmayan sandbox'ları temizlemek için sistem yöneticisiyle koordinasyon gerekebilir.
 
 **Sandbox disk yapısı:**
 ```
-/home/daytona/
+/home/sandbox/
 ├── veri.xlsx              ← kullanıcı dosyası (upload ile gelir)
-├── clean_data.pkl         ← analiz arası geçici (temizlenebilir)
-├── temp_Sheet1.csv        ← DuckDB için CSV (analiz sonrası silinir)
+├── temp_Sheet1.csv        ← DuckDB için CSV (≥40MB dosyalar, analiz sonrası silinir)
 ├── rapor.pdf              ← çıktı
 ├── DejaVuSans.ttf         ← kalıcı font (Phase 1'de kopyalandı)
 └── DejaVuSans-Bold.ttf    ← kalıcı font
@@ -457,8 +466,8 @@ middleware = [
 
 ```bash
 Python 3.12+
-ANTHROPIC_API_KEY  # console.anthropic.com
-DAYTONA_API_KEY    # app.daytona.io
+ANTHROPIC_API_KEY      # console.anthropic.com
+OPEN_SANDBOX_API_KEY   # OpenSandbox backend
 ```
 
 ### Kurulum
@@ -477,8 +486,7 @@ streamlit run app.py
 ```toml
 deepagents          # LangChain create_agent + middleware
 langchain-anthropic >= 1.4.0
-langchain-daytona   # DaytonaSandbox tool backend
-daytona             # Sandbox lifecycle API
+opensandbox         # OpenSandbox backend
 streamlit >= 1.40.0
 pandas, openpyxl, duckdb >= 1.1.0
 pdfplumber, Pillow, pyyaml
@@ -488,9 +496,9 @@ pdfplumber, Pillow, pyyaml
 
 | Sorun | Sebep | Çözüm |
 |---|---|---|
-| Sandbox başlamıyor | Daytona disk limiti (30GiB) | Stopped sandbox'ları sil |
+| Sandbox başlamıyor | Docker disk/kaynak | Sistem yöneticisiyle iletişim |
 | `ModuleNotFoundError: deepagents` | `pip install -e .` yapılmadı | `pip install -e .` çalıştır |
-| İlk sorgu ~30s bekliyor | Paket kurulumu devam ediyor | Normaldir, prewarm tam bitmedi |
+| İlk sorgu ~5-10s bekliyor | Package verification devam ediyor | Normaldir, prewarm tam bitmedi |
 | PDF oluşturulmuyor | Arial/Helvetica font | smart_interceptor otomatik düzeltir |
 
 ---
@@ -499,12 +507,13 @@ pdfplumber, Pillow, pyyaml
 
 | Karar | Neden? |
 |---|---|
-| Sandbox izolasyonu (Daytona) | Kullanıcı kodu local process'e zarar veremez |
+| Sandbox izolasyonu (OpenSandbox) | Kullanıcı kodu local process'e zarar veremez |
 | `pip install` bloklaması | Paketler pre-installed; LLM kötü niyetli paket kuramaz |
 | Ağ isteği bloklaması | Sandbox veri sızdıramaz, dış kaynak çekemez |
 | Filesystem keşfi bloklaması | Path zaten biliniyor; LLM sandbox dizinini tarayamaz |
 | Execute limit | Sonsuz döngüyü ve maliyet patlamasını önler |
 | Hardcoded metrik bloklaması | LLM hallucination'ını PDF'e yansıtmaz |
+| Persistent kernel | Değişkenler korunur → kod daha basit, hata riski azalır |
 
 ---
 
