@@ -4,66 +4,70 @@ Bu doküman sistemin iç çalışma mekanizmalarını açıklar: veri aktarımı
 
 ---
 
-## 1. Execute İzolasyonu — Neden Her Execute Ayrı?
+## 1. Persistent Kernel — Değişkenler Korunur
 
-Her `execute()` çağrısı Daytona sandbox'ta bağımsız bir Python subprocess açar:
+`execute()` çağrıları **aynı persistent Python kernel**'da (OpenSandbox CodeInterpreter) çalışır:
 
 ```
 Agent (LLM, tek process)
   │
-  ├── execute() çağrısı #1 ──▶  python3 /tmp/_run_abc.py  (PID 1234, biter, ölür)
-  ├── execute() çağrısı #2 ──▶  python3 /tmp/_run_def.py  (PID 5678, biter, ölür)
-  └── execute() çağrısı #3 ──▶  python3 /tmp/_run_ghi.py  (PID 9012, biter, ölür)
+  ├── execute() çağrısı #1 ──▶  CodeInterpreter context (df yüklenir)
+  │                             df, imports, değişkenler bellekte kalır
+  ├── execute() çağrısı #2 ──▶  AYNI context (df hala mevcut!)
+  │                             df'ye doğrudan erişim, yeniden okuma yok
+  └── execute() çağrısı #3 ──▶  AYNI context (hem df hem m mevcut!)
+                                Tüm değişkenler kullanılabilir
 ```
 
-**Sonuç:** Execute #1'de tanımlanan `df` değişkeni Execute #2'de yoktur.
-Execute'lar arası veri aktarımı için **disk** kullanılır.
+**Sonuç:** Execute #1'de tanımlanan `df` değişkeni Execute #2 ve #3'te **hala bellektedir**.
+Execute'lar arası veri aktarımı için **pickle/disk gerekmez** — değişkenler zaten persist eder.
 
 ---
 
-## 2. Pickle Pattern — Küçük/Orta Dosyalar (<40MB)
+## 2. Persistent Kernel Pattern — Değişken Yeniden Kullanımı
 
-Pandas DataFrame'ini execute'lar arası taşımanın en hızlı yolu:
+Persistent kernel sayesinde DataFrame'leri **yeniden okumaya gerek yok**:
 
 ```python
-# Execute 1: Temizle + Kaydet
+# Execute 1: Yükle + Temizle (df bellekte kalır)
 import pandas as pd
 
-df = pd.read_excel('/home/daytona/data.xlsx')
+df = pd.read_excel('/home/sandbox/data.xlsx')
 df.dropna(subset=['Customer ID'], inplace=True)
 df['InvoiceDate'] = pd.to_datetime(df['InvoiceDate'])
-df.to_pickle('/home/daytona/clean_data.pkl')
-del df  # RAM'i serbest bırak
-print(f"Kaydedildi: {pd.read_pickle('/home/daytona/clean_data.pkl').shape}")
+print(f"✅ Yüklendi: {len(df):,} satır")
+# df bellekte persist eder, pickle gerekmez
 ```
 
 ```python
-# Execute 2: Oku + Analiz Et + PDF
-import pandas as pd
-
-df = pd.read_pickle('/home/daytona/clean_data.pkl')
+# Execute 2: df HALA bellekte — doğrudan kullan
+# pd.read_pickle GEREKMEZ, df zaten mevcut!
 
 m = {
     'total_customers': df['Customer ID'].nunique(),
     'total_revenue':   (df['Quantity'] * df['Price']).sum(),
     'avg_orders':      df.groupby('Customer ID')['Invoice'].nunique().mean(),
 }
-
-# HTML + WeasyPrint PDF tek execute içinde
-html = f"""<html>...<b>{m['total_customers']:,}</b>...</html>"""
-import weasyprint
-weasyprint.HTML(string=html).write_pdf('/home/daytona/rapor.pdf')
-print(f"PDF: {__import__('os').path.getsize('/home/daytona/rapor.pdf')//1024} KB")
+print(f"✅ Metrikler: {m}")
 ```
 
-### Pickle vs CSV Karşılaştırması
+```python
+# Execute 3: Hem df hem m HALA bellekte
+# HTML + WeasyPrint PDF
+html = f"""<html>...<b>{m['total_customers']:,}</b>...</html>"""
+import weasyprint
+weasyprint.HTML(string=html).write_pdf('/home/sandbox/rapor.pdf')
+print(f"✅ PDF: {__import__('os').path.getsize('/home/sandbox/rapor.pdf')//1024} KB")
+```
 
-| | Pickle | CSV |
+### Persistent Kernel vs DuckDB
+
+| | Persistent Kernel | DuckDB |
 |---|---|---|
-| Okuma hızı | ~5x daha hızlı | Yavaş (parse gerekir) |
-| Veri tipleri | datetime, category korunur | Hepsi string olur |
-| DuckDB uyumu | ❌ DuckDB okuyamaz | ✅ `read_csv_auto()` |
-| Kullanım | <40MB, pandas analizi | ≥40MB, DuckDB analizi |
+| Kullanım | Tüm dosya boyutları | ≥40MB (önerilen) |
+| Hız | Çok hızlı (RAM'de) | Lazy query (disk) |
+| Veri tipleri | Korunur | CSV → parse |
+| Avantaj | Değişkenler persist eder | Bellek tasarrufu |
 
 ---
 
@@ -89,7 +93,7 @@ def safe_filename(name):
     ascii_name = nfkd.encode('ascii', 'ignore').decode('ascii')
     return re.sub(r'[^a-z0-9]+', '_', ascii_name.lower()).strip('_')
 
-file_path = '/home/daytona/data.xlsx'
+file_path = '/home/sandbox/data.xlsx'
 
 # Sheet tespiti — ASLA pd.read_excel(path) ile direkt okuma yapma
 xls = pd.ExcelFile(file_path)
@@ -100,7 +104,7 @@ csv_paths = {}  # {sheet_name: csv_path}
 for sheet in sheet_names:
     df = pd.read_excel(file_path, sheet_name=sheet)
     safe_name = safe_filename(sheet)
-    csv_path = f'/home/daytona/temp_{safe_name}.csv'
+    csv_path = f'/home/sandbox/temp_{safe_name}.csv'
     df.to_csv(csv_path, index=False)
     csv_paths[sheet] = csv_path
     print(f"  '{sheet}': {len(df):,} satır → {csv_path}")
@@ -118,10 +122,11 @@ import weasyprint
 import os
 from datetime import datetime
 
-# csv_paths'i yeniden tanımla (execute izolasyonu nedeniyle)
+# csv_paths persistent kernel'da hala bellekte
+# Ama robust kod için path'leri явно yazabiliriz
 csv_paths = {
-    'Year 2009-2010': '/home/daytona/temp_year_2009_2010.csv',
-    'Year 2010-2011': '/home/daytona/temp_year_2010_2011.csv',
+    'Year 2009-2010': '/home/sandbox/temp_year_2009_2010.csv',
+    'Year 2010-2011': '/home/sandbox/temp_year_2010_2011.csv',
 }
 
 # UNION ALL — aynı kolonlu dönemsel sheet'ler
@@ -156,7 +161,7 @@ html = f"""<!DOCTYPE html><html><head><meta charset="UTF-8">
 <p>Toplam Gelir: <b>${m['total_revenue']:,.2f}</b></p>
 </body></html>"""
 
-pdf_path = '/home/daytona/rapor.pdf'
+pdf_path = '/home/sandbox/rapor.pdf'
 weasyprint.HTML(string=html).write_pdf(pdf_path)
 print(f"✅ PDF: {os.path.getsize(pdf_path)//1024} KB")
 
@@ -247,8 +252,8 @@ html = f"""<!DOCTYPE html>
 </body></html>"""
 
 # Dosyaya yaz ve PDF'e dönüştür
-html_path = '/home/daytona/temp_report.html'
-pdf_path  = '/home/daytona/rapor.pdf'
+html_path = '/home/sandbox/temp_report.html'
+pdf_path  = '/home/sandbox/rapor.pdf'
 
 with open(html_path, 'w', encoding='utf-8') as f:
     f.write(html)
@@ -270,10 +275,9 @@ os.remove(html_path)  # Temp temizle
 ## 6. Sandbox Dosya Sistemi
 
 ```
-/home/daytona/              ← Kalıcı sandbox disk (execute'lar arası yaşar)
+/home/sandbox/              ← Kalıcı sandbox disk (execute'lar arası yaşar)
 ├── data.xlsx               ← Kullanıcının yüklediği dosya
-├── clean_data.pkl          ← Pickle (geçici, analiz sonrası silinebilir)
-├── temp_sheet1.csv         ← DuckDB için CSV (analiz sonrası silinmeli)
+├── temp_sheet1.csv         ← DuckDB için CSV (≥40MB dosyalar, analiz sonrası silinmeli)
 ├── temp_sheet2.csv         ← DuckDB için CSV
 ├── rapor.pdf               ← Çıktı PDF
 ├── DejaVuSans.ttf          ← Font (kalıcı, sandbox kurulumunda kopyalanır)
@@ -283,7 +287,7 @@ os.remove(html_path)  # Temp temizle
 └── _run_abc123.py          ← execute.py'nin oluşturduğu temp script
 ```
 
-**Dosya yolu kuralı:** Her zaman tam path kullan — `'/home/daytona/dosya.csv'`
+**Dosya yolu kuralı:** Her zaman tam path kullan — `'/home/sandbox/dosya.csv'`
 
 ---
 
@@ -305,7 +309,7 @@ os.remove(html_path)  # Temp temizle
 | Execute limiti | 6. veya 10. execute'dan sonra | Bütçe aşıldı |
 | **Circuit breaker** | **2 ardışık blok** | **Sonsuz döngü önleme** |
 
-**Path Normalization:** Duplicate parse_file tespitinde `/home/daytona/file.xlsx` ve `file.xlsx` aynı kabul edilir (prefix strip).
+**Path Normalization:** Duplicate parse_file tespitinde `/home/sandbox/file.xlsx` ve `file.xlsx` aynı kabul edilir (prefix strip).
 
 **Circuit Breaker:** Agent 2 kez üst üste bloklanırsa (örn: parse_file→ls→parse_file) üçüncü tool çağrısı STOP mesajı döner, zorunlu hata.
 
@@ -343,12 +347,12 @@ parse_file() çalışır
 pandas  DuckDB
    │       │
    ▼       ▼
-pickle  CSV dönüşümü
-   │       │
-   ▼       ▼
-analiz  UNION ALL / JOIN / bağımsız
-   │       │
-   └───┬───┘
+analiz  CSV dönüşümü → UNION ALL / JOIN / bağımsız
+(df     │
+bellekte│
+persist)│
+   │    │
+   └───┬┘
        ▼
   m = { hesaplanmış metrikler }
        │
@@ -387,29 +391,30 @@ stats = duckdb.sql("SELECT COUNT(DISTINCT customer_id), SUM(revenue) FROM ...").
 m = {'customers': int(stats[0]), 'revenue': float(stats[1])}
 ```
 
-### Hata: İkinci execute'da `csv_paths` bulunamıyor
+### Hata: `csv_paths` bulunamıyor (nadir, kernel restart sonrası)
+
+**Not:** Persistent kernel ile bu hata artık çok nadir. Sadece sandbox yeniden başladıysa oluşur.
 
 ```python
-# ❌ Yanlış — Execute 1'de tanımlı, Execute 2'de yok
-# KeyError: csv_paths
+# Persistent kernel'da csv_paths Execute #1'den Execute #2'ye taşınır
+# Ancak robust kod için path'leri açıkça yazmak iyi pratik:
 
-# ✅ Doğru — Execute 2'de yeniden tanımla (sabit path'lerden)
 csv_paths = {
-    'Sheet1': '/home/daytona/temp_sheet1.csv',
-    'Sheet2': '/home/daytona/temp_sheet2.csv',
+    'Sheet1': '/home/sandbox/temp_sheet1.csv',
+    'Sheet2': '/home/sandbox/temp_sheet2.csv',
 }
+# Bu sayede kernel restart olsa bile kod çalışır
 ```
 
-### Hata: Failed to resolve container IP
+### Hata: Sandbox bağlantı hatası
 
-**Sebep:** Daytona sandbox container'ı geçici olarak network'ten düştü (DNS resolution hatası).
+**Sebep:** OpenSandbox container'ı geçici olarak network'ten düştü veya restart oluyor.
 
 **Çözüm:** `execute.py` otomatik retry yapar (max 3 deneme, 1s delay). Eğer 3 denemede de başarısız olursa:
 
 ```python
 # Kullanıcıya gösterilen mesaj:
-"⚠️ Sandbox bağlantı hatası - container IP çözümlenemedi.
-Lütfen 'Yeni Konuşma' ile oturumu sıfırlayın."
+"⚠️ Sandbox bağlantı hatası - lütfen 'Yeni Konuşma' ile oturumu sıfırlayın."
 ```
 
 **Kod:** [src/tools/execute.py](src/tools/execute.py) lines 96-120 - Connection retry logic with exponential backoff.
@@ -422,13 +427,13 @@ Lütfen 'Yeni Konuşma' ile oturumu sıfırlayın."
 # Bu mesajı görünce direkt CSV dönüşümüne geç
 
 # ❌ Yanlış
-df = pd.read_excel('/home/daytona/large.xlsx')  # MemoryError riski
+df = pd.read_excel('/home/sandbox/large.xlsx')  # MemoryError riski
 
 # ✅ Doğru
-xls = pd.ExcelFile('/home/daytona/large.xlsx')
+xls = pd.ExcelFile('/home/sandbox/large.xlsx')
 for sheet in xls.sheet_names:
-    df = pd.read_excel('/home/daytona/large.xlsx', sheet_name=sheet)
-    df.to_csv(f'/home/daytona/temp_{sheet}.csv', index=False)
+    df = pd.read_excel('/home/sandbox/large.xlsx', sheet_name=sheet)
+    df.to_csv(f'/home/sandbox/temp_{sheet}.csv', index=False)
     del df
 ```
 
@@ -588,41 +593,31 @@ Agent Thread (tool call)          Streamlit UI Thread
 
 ## 15. Sandbox Disk Yönetimi
 
-Daytona 30GiB disk limiti var. Stopped sandbox'lar disk kaplar.
+Docker container'lar disk kaplar. Kullanılmayan sandbox'ları temizlemek gerekir.
 
 ```python
-# Tüm stopped sandbox'ları sil
-from daytona import Daytona, SandboxState
+# OpenSandbox yönetimi
+from opensandbox import OpenSandboxBackend
 
-d = Daytona()
-result = d.list()
-sandboxes = result.items if hasattr(result, 'items') else list(result)
-
-for s in sandboxes:
-    state = getattr(s, 'state', None)
-    print(f"{s.id[:8]}... {state}")
-    if state == SandboxState.STOPPED:
-        d.delete(s)
-        print(f"  → Silindi")
+backend = OpenSandboxBackend()
+# Sandbox TTL: 2 saat (7200s) idle kalırsa otomatik silinir
+# Docker volume cleanup için sistem yöneticisi gerekebilir
 ```
 
-**`auto_delete_interval=3600`** (`manager.py`): Sandbox 1 saat idle kalırsa otomatik silinir.
-Ama stopped (manuel durdurulmuş) sandbox'lar bu TTL'den etkilenmez — `d.delete()` gerekir.
+**TTL ayarı** (`manager.py`): Sandbox 2 saat idle kalırsa otomatik silinir (`auto_delete_interval=7200`).
 
 **Disk harcayan dosyalar:**
 - Excel dosyaları: 40-100MB
 - CSV temp dosyaları: Excel ile benzer boyut (analiz sonrası silinmeli)
-- Pickle: genellikle <10MB
 - PDF: 50-500KB
 
 ```python
 # Analiz bittikten sonra temp dosyaları temizle
 import os
 temp_files = [
-    '/home/daytona/temp_sheet1.csv',
-    '/home/daytona/temp_sheet2.csv',
-    '/home/daytona/clean_data.pkl',
-    '/home/daytona/report_temp.html',
+    '/home/sandbox/temp_sheet1.csv',
+    '/home/sandbox/temp_sheet2.csv',
+    '/home/sandbox/report_temp.html',
 ]
 for f in temp_files:
     if os.path.exists(f):
