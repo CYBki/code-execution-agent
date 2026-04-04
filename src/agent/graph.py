@@ -217,7 +217,10 @@ def build_agent(
                                 ".sum()", ".mean()", ".count()", ".nunique()",
                                 ".sort_values(", ".nlargest(", ".nsmallest(",
                                 ".apply(", ".agg(", ".pivot", ".fetchone()",
-                                ".fetchall()", ".df()")
+                                ".fetchall()", ".df()",
+                                ".idxmax()", ".idxmin()", ".max()", ".min()",
+                                ".head(", ".tail(", ".iterrows()", ".itertuples(",
+                                "len(", "int(", "float(")
 
             def _is_hardcoded_assignment(match_text):
                 """Check if a specific assignment uses data access ops."""
