@@ -83,7 +83,23 @@ SCENARIOS = [
         "expect_report": True,
         "evaluators": [
             "no_pickle", "persistent_kernel", "no_hardcoded_metrics",
-            "no_shell_exploration", "report_generated",
+            "dashboard_integrity", "no_shell_exploration", "report_generated",
+            "execute_efficiency", "completeness",
+        ],
+    },
+
+    # ── Scenario 6: Dashboard with chart data integrity ────────────────
+    {
+        "name": "dashboard_chart_integrity",
+        "fixture": "sales_50.xlsx",
+        "queries": [
+            "En çok satan 5 ürünü ve saatlik satış dağılımını gösteren interaktif dashboard oluştur."
+        ],
+        "expected_keywords": ["ürün", "satış", "dashboard", "chart"],
+        "expect_report": True,
+        "evaluators": [
+            "no_pickle", "persistent_kernel", "no_hardcoded_metrics",
+            "dashboard_integrity", "report_generated",
             "execute_efficiency", "completeness",
         ],
     },

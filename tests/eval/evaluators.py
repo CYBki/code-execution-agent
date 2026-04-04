@@ -107,6 +107,55 @@ def eval_no_hardcoded_metrics(tool_calls: list[dict], response: str) -> EvalResu
 
 
 # ---------------------------------------------------------------------------
+# 3b. Dashboard data integrity — no hardcoded chart arrays
+# ---------------------------------------------------------------------------
+def eval_dashboard_integrity(tool_calls: list[dict], response: str) -> EvalResult:
+    """Dashboard/HTML executes must use .tolist() from DataFrames, not hardcoded arrays."""
+    chart_var_patterns = (
+        r"(top_\w+_data|hourly_distribution|sales_data|revenue_data|product_names|category_labels)",
+    )
+    violations = []
+
+    for tc in tool_calls:
+        if tc["name"] != "execute":
+            continue
+        cmd = tc.get("input", {}).get("command", "")
+
+        # Only check executes that generate dashboards/HTML
+        if "html" not in cmd.lower() and "chart" not in cmd.lower() and "dashboard" not in cmd.lower():
+            continue
+
+        # Check for hardcoded arrays: variable = ['string', 'string', ...] or [num, num, ...]
+        # Pattern: chart_var = [...] with 3+ items, without .tolist() or .values
+        for pattern in chart_var_patterns:
+            # Match: top_products_data = ['Product A', 'Product B', 'Product C', ...]
+            string_array = re.search(
+                pattern + r"\s*=\s*\[(?:['\"][\w\s]+['\"],?\s*){3,}\]",
+                cmd,
+                re.IGNORECASE
+            )
+            # Match: revenue_data = [100000, 80000, 60000, ...]
+            number_array = re.search(
+                pattern + r"\s*=\s*\[\d+(?:,?\s*\d+){2,}\]",
+                cmd,
+                re.IGNORECASE
+            )
+
+            if string_array or number_array:
+                match = string_array or number_array
+                # Allow if it's from .tolist() or .values
+                if ".tolist()" not in cmd[:match.start()] and ".values" not in cmd[:match.start()]:
+                    var_name = match.group(1) if match else "unknown"
+                    violations.append(f"{var_name} = [...] without .tolist()")
+
+    if violations:
+        return EvalResult("dashboard_integrity", False, 0.0,
+                          f"Hardcoded chart data (fake): {violations[:2]}")
+    return EvalResult("dashboard_integrity", True, 1.0,
+                      "All chart data from real analysis (.tolist())")
+
+
+# ---------------------------------------------------------------------------
 # 4. Validation present in analysis execute
 # ---------------------------------------------------------------------------
 def eval_validation_present(tool_calls: list[dict], response: str) -> EvalResult:
@@ -224,6 +273,7 @@ ALL_EVALUATORS = {
     "no_pickle": eval_no_pickle,
     "persistent_kernel": eval_persistent_kernel,
     "no_hardcoded_metrics": eval_no_hardcoded_metrics,
+    "dashboard_integrity": eval_dashboard_integrity,
     "validation_present": eval_validation_present,
     "no_shell_exploration": eval_no_shell_exploration,
     "report_generated": eval_report_generated,
@@ -236,6 +286,7 @@ DEFAULT_EVALUATORS = [
     "no_pickle",
     "persistent_kernel",
     "no_hardcoded_metrics",
+    "dashboard_integrity",
     "validation_present",
     "no_shell_exploration",
     "execute_efficiency",

@@ -211,8 +211,8 @@ def build_agent(
             # Catches: list assignments that look like fake data for dashboards
             import re
             hardcoded_patterns = [
-                r"(top_\w+_data|hourly_distribution|monthly_data|chart_data)\s*=\s*\[(?:['\"][\w\s]+['\"],?\s*){3,}\]",  # ['Product A', 'Product B', ...]
-                r"(top_\w+_revenue|sales_data|revenue_data)\s*=\s*\[\d+,?\s*\d+,?\s*\d+",  # [100000, 80000, 60000]
+                r"(top_\w+_data|hourly_distribution|monthly_data|chart_data|product_names|category_labels|customer_names)\s*=\s*\[(?:['\"][\w\s]+['\"],?\s*){3,}\]",  # ['Product A', 'Product B', ...]
+                r"(top_\w+_revenue|sales_data|revenue_data|amounts|values|totals)\s*=\s*\[\d+,?\s*\d+,?\s*\d+",  # [100000, 80000, 60000]
             ]
             if any(re.search(pattern, cmd, re.IGNORECASE) for pattern in hardcoded_patterns):
                 # Check if it's really hardcoded (not .tolist() or from analysis)

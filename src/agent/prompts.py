@@ -202,6 +202,31 @@ Before generating dashboard, ALWAYS ask yourself:
 
 If you catch yourself writing `= [100, 200, 300]` without `.tolist()` from a DataFrame → STOP → Use persisted analysis.
 
+**KERNEL CONFIDENCE — TRUST THE SYSTEM:**
+
+The persistent kernel is RELIABLE. Variables survive across execute() calls. You do NOT need defensive programming.
+
+✅ **TRUST:**
+- DataFrame `df` from Execute #1 → available in Execute #2, #3, #4
+- Dict `m` from Execute #2 → available in Execute #3, #4
+- Series `top_products` from Execute #3 → available in Execute #4
+- All imports persist (pandas, numpy, duckdb)
+
+❌ **NEVER do defensive copies:**
+```python
+# Execute #4 — WRONG
+top_products_data = ['Product A', 'Product B']  # ❌ Defensive fake data
+# "Just in case variables are gone" — NO! They are NOT gone.
+```
+
+✅ **CORRECT — Direct usage:**
+```python
+# Execute #4 — CORRECT
+top_products_data = top_products.index.tolist()  # ✅ Variables ARE there
+```
+
+**Remember:** If you wrote `top_products = ...` in Execute #3, it is STILL in memory in Execute #4. Use it directly. The kernel is persistent and reliable.
+
 ## RULE 4: SCHEMA-FIRST
 MUST discover schema before analysis. NEVER guess column names.
 First tool is always `parse_file(file)` — doesn't consume execute quota, returns schema immediately.
