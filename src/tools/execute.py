@@ -51,7 +51,11 @@ def _extract_python_code(command: str) -> str | None:
     return None
 
 
-def make_execute_tool(backend: OpenSandboxBackend):
+_HTML_MARKER = "__PUBLISH_HTML__"
+_HTML_PATH = "/home/sandbox/__dashboard__.html"
+
+
+def make_execute_tool(backend: OpenSandboxBackend, session_id: str = ""):
     """Factory: create the execute tool bound to an OpenSandbox backend."""
 
     @tool
@@ -131,6 +135,24 @@ def make_execute_tool(backend: OpenSandboxBackend):
                 logger.warning("execute: exit_code is None, cannot determine success")
             elif exit_code != 0:
                 return f"Exit code: {exit_code}\n{output}"
+            # --- Auto-detect publish_html() calls and route HTML to artifact store ---
+            if output and _HTML_MARKER in output:
+                try:
+                    html_result = backend.execute(f"cat {_HTML_PATH}")
+                    html_content = getattr(html_result, "output", "")
+                    if html_content and html_content.strip():
+                        from src.tools.generate_html import inject_height_script
+                        from src.tools.artifact_store import get_store
+                        get_store(session_id).add_html(inject_height_script(html_content))
+                        backend.execute(f"rm -f {_HTML_PATH}")
+                        logger.info("publish_html: captured %d chars of HTML", len(html_content))
+                    output = output.replace(_HTML_MARKER, "").strip()
+                    if output:
+                        output += "\n"
+                    output += "✅ HTML dashboard rendered successfully."
+                except Exception as e:
+                    logger.error("publish_html extraction failed: %s", e)
+
             return output or "(no output)"
         except Exception as e:
             logger.error("Execute failed: %s", e)

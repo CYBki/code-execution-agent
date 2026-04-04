@@ -194,6 +194,20 @@ class SandboxManager:
 
             self._backend = OpenSandboxBackend(sandbox, interpreter, py_context)
 
+            # Pre-inject publish_html() helper into the persistent kernel
+            _INIT_CODE = (
+                "def publish_html(html_str):\n"
+                "    \"\"\"Write HTML dashboard to file for automatic rendering in the UI.\"\"\"\n"
+                "    with open('/home/sandbox/__dashboard__.html', 'w', encoding='utf-8') as f:\n"
+                "        f.write(html_str)\n"
+                "    print('__PUBLISH_HTML__')\n"
+            )
+            try:
+                interpreter.codes.run(_INIT_CODE, context=py_context)
+                logger.info("publish_html() injected into persistent kernel")
+            except Exception as e:
+                logger.warning("Failed to inject publish_html(): %s", e)
+
             # Packages are pre-installed in image — signal ready immediately
             self._packages_ready.set()
             logger.info("Sandbox ready (packages pre-installed, persistent kernel active)")

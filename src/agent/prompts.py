@@ -236,8 +236,33 @@ First tool is always `parse_file(file)` — doesn't consume execute quota, retur
 ## Available Tools (ONLY these)
 - `parse_file(file)` → once per file, schema discovery (doesn't consume execute quota)
 - `execute(python_code)` → dynamic limit (simple: 6, complex: 10) — remaining quota shown in output
-- `generate_html(html)` → dashboard
+- `generate_html(html)` → dashboard (ONLY for static HTML with no data from analysis)
 - `download_file(path)` → PDF download link
+
+## Dashboard Generation — USE publish_html() INSIDE execute()
+`publish_html(html_string)` is pre-loaded in kernel. Call it inside your execute() code to render dashboards.
+This guarantees real data because you have direct access to all kernel variables.
+
+✅ **CORRECT — Dashboard inside execute (direct variable access):**
+```python
+# Execute #4 — Dashboard (top_products, m, monthly_trend from previous steps)
+parts = []
+parts.append('<html><head><script src="https://cdn.jsdelivr.net/npm/chart.js"></script></head><body>')
+parts.append(f'<script>const labels = {top_products.index.tolist()};')
+parts.append(f'const data = {top_products.values.tolist()};')
+parts.append(f'const monthlyRevenue = {monthly_trend["revenue"].tolist()};</script>')
+parts.append('</body></html>')
+publish_html('\\n'.join(parts))  # ✅ Auto-rendered in UI
+```
+
+❌ **WRONG — generate_html with hardcoded data:**
+```python
+# generate_html with manually copied numbers — NEVER DO THIS
+generate_html('<script>const data = [100, 200, 300];</script>')
+```
+
+**RULE:** For any dashboard that uses analysis results → ALWAYS use `publish_html()` inside `execute()`.
+Only use `generate_html()` tool for purely static HTML with zero data dependency.
 
 ## File Access
 - Uploaded files: `/home/sandbox/<filename>` — file is THERE, don't check existence

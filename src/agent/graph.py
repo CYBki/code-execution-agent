@@ -93,7 +93,7 @@ def build_agent(
     # 5 tools — no extra ls/glob/grep/write_file injected
     tools = [
         make_parse_file_tool(uploaded_files=uploaded_files),  # Pass files to avoid st.session_state in agent thread
-        make_execute_tool(backend),
+        make_execute_tool(backend, session_id=thread_id),
         make_generate_html_tool(session_id=thread_id),
         make_visualization_tool(backend, session_id=thread_id),
         make_download_file_tool(backend, session_id=thread_id),
