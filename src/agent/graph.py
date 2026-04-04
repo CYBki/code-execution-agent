@@ -207,30 +207,39 @@ def build_agent(
                     tool_call_id=tool_call_id,
                 )
 
-            # Detect hardcoded chart data (dashboard integrity check)
-            # Catches: list assignments that look like fake data for dashboards
+            # Detect hardcoded chart/dashboard data (integrity check)
+            # Catches: list/dict assignments that look like fake data
             import re
             hardcoded_patterns = [
-                r"(top_\w+_data|hourly_distribution|monthly_data|chart_data|product_names|category_labels|customer_names)\s*=\s*\[(?:['\"][\w\s]+['\"],?\s*){3,}\]",  # ['Product A', 'Product B', ...]
+                r"(top_\w+_data|hourly_distribution|monthly_data|chart_data|product_names|category_labels|customer_names)\s*=\s*\[(?:['\"]\[\w\s\]+['\"],?\s*){3,}\]",  # ['Product A', 'Product B', ...]
                 r"(top_\w+_revenue|sales_data|revenue_data|amounts|values|totals)\s*=\s*\[\d+,?\s*\d+,?\s*\d+",  # [100000, 80000, 60000]
+                # Dict literals with metric-like keys (dashboard_metrics = {...})
+                r"(dashboard_metrics|dashboard_data|kpi_data|metrics_dict)\s*=\s*\{",
+                # List-of-dict literals for chart data (segment_data = [{...}])
+                r"(segment_data|category_data|country_data|hourly_data|daily_data|monthly_data|product_data)\s*=\s*\[",
             ]
             if any(re.search(pattern, cmd, re.IGNORECASE) for pattern in hardcoded_patterns):
-                # Check if it's really hardcoded (not .tolist() or from analysis)
-                if ".tolist()" not in cmd and ".values" not in cmd and "groupby" not in cmd:
-                    logger.warning("[Tool] WARNING: Potential hardcoded chart data detected")
+                # Check if it's really hardcoded (not .tolist(), .reset_index(), from analysis)
+                data_access = (".tolist()", ".values", "groupby", ".reset_index()",
+                               ".to_dict(", ".iloc[", ".loc[", "duckdb.sql")
+                if not any(da in cmd for da in data_access):
+                    logger.warning("[Tool] WARNING: Potential hardcoded dashboard data detected")
                     _execute_count -= 1  # Don't count
                     return ToolMessage(
-                        content="⚠️ HARDCODED DATA DETECTED\n\n"
-                                "You are assigning chart data with hardcoded values like:\n"
-                                "  top_products_data = ['Product A', 'Product B', ...]\n"
-                                "  revenue_data = [100000, 80000, ...]\n\n"
-                                "❌ This is FAKE DATA. Dashboard will be MISLEADING.\n\n"
-                                "✅ USE REAL ANALYSIS RESULTS from previous execute:\n"
-                                "  top_products_data = top_products.index.tolist()  # From analysis\n"
-                                "  revenue_data = top_products.values.tolist()  # Real numbers\n\n"
-                                "REMEMBER: Variables (DataFrames, dicts) persist in kernel.\n"
-                                "Access them directly — no need to invent data.\n\n"
-                                "Rewrite execute using persisted variables. Execute quota NOT consumed.",
+                        content="⚠️ HARDCODED DASHBOARD DATA DETECTED\n\n"
+                                "You are creating variables with literal numbers like:\n"
+                                "  dashboard_metrics = {'total_customers': 5863, ...}  ❌\n"
+                                "  segment_data = [{'name': 'X', 'customers': 508}]  ❌\n"
+                                "  hourly_data = [{'hour': 6, 'revenue': 890000}]  ❌\n\n"
+                                "❌ This is HARDCODED/FABRICATED DATA. Dashboard will be WRONG.\n\n"
+                                "✅ USE KERNEL VARIABLES from previous execute steps:\n"
+                                "  seg = segment_summary.reset_index()\n"
+                                "  seg_names = seg['customer_segment'].tolist()\n"
+                                "  seg_revs = seg['toplam_ciro'].tolist()\n"
+                                "  # m dict, country_analysis, hourly_pattern — all in kernel\n\n"
+                                "REMEMBER: Variables persist in kernel across ALL execute calls.\n"
+                                "Access them directly — NEVER copy numbers from output.\n\n"
+                                "Rewrite using kernel variables. Execute quota NOT consumed.",
                         tool_call_id=tool_call_id,
                     )
 
@@ -387,54 +396,57 @@ def build_agent(
                     logger.info("[Tool] Auto-fixed fonts in execute #%d", _execute_count)
                     tc["args"]["command"] = cmd
 
-                # --- Hardcoded metric variable check (skip if too many blocks) ---
-                if _total_blocked >= _MAX_BLOCKED:
-                    logger.info("[Tool] Skipping variable assignment check (blocked %d times)", _total_blocked)
-                else:
-                    # Block hardcoded metric variable assignments in PDF code
-                    # Detect: total_revenue = 8832003 (literal number, not from data)
-                    metric_keywords = (
-                        "revenue", "customer", "order", "vip",
-                        "potential", "spend", "profit", "sales",
-                    )
-                    # Safe variable patterns: UI/formatting constants + config
-                    safe_patterns = (
-                        # UI/PDF formatting — MUST be fixed constants (Rule 3 Clarification)
-                        "font", "size", "spacing", "margin", "width", "height",
-                        "padding", "indent", "line_h", "cell_h", "col_w",
-                        "page_", "title_", "header_", "row_h",
-                        # Display limits & truncation
-                        "limit", "top_n", "_to_show", "_displayed", "max_len",
-                        "max_name", "truncat", "display_",
-                        # Config/counting constants
-                        "insight", "strategy", "section", "_num",
-                        "_multiplier", "_percent", "growth", "max_", "min_",
-                        "_count_", "batch", "chunk", "n_items", "n_rows",
-                    )
-                    hardcoded_vars = re.findall(
-                        r'^(\w+)\s*=\s*(\d[\d,]*\.?\d*)\s*(?:#.*)?$', cmd, re.MULTILINE
-                    )
-                    fabricated = [
-                        (var, val) for var, val in hardcoded_vars
-                        if any(kw in var.lower() for kw in metric_keywords)
-                        and not any(sp in var.lower() for sp in safe_patterns)
-                        and float(val.replace(',', '')) > 100  # config constants are small
-                    ]
-                    if fabricated:
-                        examples = [f"{v}={n}" for v, n in fabricated[:3]]
-                        logger.info("[Tool] BLOCKED hardcoded metric vars in PDF: %s", examples)
-                        _execute_count -= 1
-                        _total_blocked += 1
-                        return ToolMessage(
-                            content=f"⛔ Hardcoded metrics detected: {examples}. "
-                                    "These values must be COMPUTED from data (df.sum(), df.mean(), etc.). "
-                                    "Variables persist in kernel — use them directly. "
-                                    "Execute quota NOT consumed.",
-                            tool_call_id=tool_call_id,
-                        )
-
                 # pdf.cell() check removed — PDF is now generated via HTML+weasyprint
                 # All numbers come from m[key] f-string interpolation in HTML template
+
+            # --- Hardcoded metric variable check (runs for ALL execute, not just PDF) ---
+            if _total_blocked >= _MAX_BLOCKED:
+                logger.info("[Tool] Skipping variable assignment check (blocked %d times)", _total_blocked)
+            else:
+                # Block hardcoded metric variable assignments
+                # Detect: total_revenue = 8832003 (literal number, not from data)
+                metric_keywords = (
+                    "revenue", "customer", "order", "vip",
+                    "potential", "spend", "profit", "sales",
+                    "ciro", "musteri", "siparis",
+                )
+                # Safe variable patterns: UI/formatting constants + config
+                safe_patterns = (
+                    # UI/PDF formatting — MUST be fixed constants (Rule 3 Clarification)
+                    "font", "size", "spacing", "margin", "width", "height",
+                    "padding", "indent", "line_h", "cell_h", "col_w",
+                    "page_", "title_", "header_", "row_h",
+                    # Display limits & truncation
+                    "limit", "top_n", "_to_show", "_displayed", "max_len",
+                    "max_name", "truncat", "display_",
+                    # Config/counting constants
+                    "insight", "strategy", "section", "_num",
+                    "_multiplier", "_percent", "growth", "max_", "min_",
+                    "_count_", "batch", "chunk", "n_items", "n_rows",
+                    # Chart config (not data)
+                    "color", "label", "opacity", "border", "radius",
+                )
+                hardcoded_vars = re.findall(
+                    r'^(\w+)\s*=\s*(\d[\d,]*\.?\d*)\s*(?:#.*)?$', cmd, re.MULTILINE
+                )
+                fabricated = [
+                    (var, val) for var, val in hardcoded_vars
+                    if any(kw in var.lower() for kw in metric_keywords)
+                    and not any(sp in var.lower() for sp in safe_patterns)
+                    and float(val.replace(',', '')) > 100  # config constants are small
+                ]
+                if fabricated:
+                    examples = [f"{v}={n}" for v, n in fabricated[:3]]
+                    logger.info("[Tool] BLOCKED hardcoded metric vars: %s", examples)
+                    _execute_count -= 1
+                    _total_blocked += 1
+                    return ToolMessage(
+                        content=f"⛔ Hardcoded metrics detected: {examples}. "
+                                "These values must be COMPUTED from data or taken from kernel variables. "
+                                "Variables persist in kernel — use m['total_revenue'], segment_summary, etc. "
+                                "Execute quota NOT consumed.",
+                        tool_call_id=tool_call_id,
+                    )
 
         logger.info("[Tool] %s(%s)", name,
                     {k: str(v)[:80] for k, v in args.items()})
