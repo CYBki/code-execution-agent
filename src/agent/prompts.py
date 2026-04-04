@@ -163,6 +163,45 @@ If empty KPI cards or "undefined" errors appear:
 2. Fix: Build complete HTML string with all data embedded inside execute()
 3. Then pass the string to generate_html()
 
+**DASHBOARD DATA INTEGRITY (CRITICAL):**
+
+⛔ **NEVER hardcode chart data.** Always use real analysis results from persisted variables.
+
+**WRONG — Hardcoded/fake data:**
+```python
+# Execute #4 — BAD PRACTICE
+top_products_data = ['Product A', 'Product B', 'Product C']  # ❌ Invented
+top_products_revenue = [100000, 80000, 60000]  # ❌ Fake numbers
+hourly_distribution = [15, 23, 35, 42, ...]  # ❌ Made-up pattern
+```
+
+**CORRECT — Use persisted analysis results:**
+```python
+# Execute #3 — Analysis (variables persist in kernel)
+top_products = df.groupby('Product')['Revenue'].sum().sort_values(ascending=False).head(5)
+hourly_sales = df.groupby(df['Date'].dt.hour)['Revenue'].sum()
+
+# Execute #4 — Dashboard using persisted DataFrames
+top_products_data = top_products.index.tolist()  # ✅ Real product names
+top_products_revenue = top_products.values.tolist()  # ✅ Real revenue
+hourly_distribution = hourly_sales.values.tolist()  # ✅ Real pattern
+
+html_dashboard = f'''
+<script>
+const productsData = {top_products_data};  // ✅ From analysis
+const revenueData = {top_products_revenue};  // ✅ From analysis
+</script>
+'''
+```
+
+**VERIFICATION:**
+Before generating dashboard, ALWAYS ask yourself:
+- [ ] Am I using variables from previous execute? (top_products, hourly_sales still in kernel)
+- [ ] Or am I inventing numbers? (if yes → STOP, use real data)
+- [ ] Do chart values match metrics in m dict? (consistency check)
+
+If you catch yourself writing `= [100, 200, 300]` without `.tolist()` from a DataFrame → STOP → Use persisted analysis.
+
 ## RULE 4: SCHEMA-FIRST
 MUST discover schema before analysis. NEVER guess column names.
 First tool is always `parse_file(file)` — doesn't consume execute quota, returns schema immediately.

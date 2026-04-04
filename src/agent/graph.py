@@ -207,6 +207,33 @@ def build_agent(
                     tool_call_id=tool_call_id,
                 )
 
+            # Detect hardcoded chart data (dashboard integrity check)
+            # Catches: list assignments that look like fake data for dashboards
+            import re
+            hardcoded_patterns = [
+                r"(top_\w+_data|hourly_distribution|monthly_data|chart_data)\s*=\s*\[(?:['\"][\w\s]+['\"],?\s*){3,}\]",  # ['Product A', 'Product B', ...]
+                r"(top_\w+_revenue|sales_data|revenue_data)\s*=\s*\[\d+,?\s*\d+,?\s*\d+",  # [100000, 80000, 60000]
+            ]
+            if any(re.search(pattern, cmd, re.IGNORECASE) for pattern in hardcoded_patterns):
+                # Check if it's really hardcoded (not .tolist() or from analysis)
+                if ".tolist()" not in cmd and ".values" not in cmd and "groupby" not in cmd:
+                    logger.warning("[Tool] WARNING: Potential hardcoded chart data detected")
+                    _execute_count -= 1  # Don't count
+                    return ToolMessage(
+                        content="⚠️ HARDCODED DATA DETECTED\n\n"
+                                "You are assigning chart data with hardcoded values like:\n"
+                                "  top_products_data = ['Product A', 'Product B', ...]\n"
+                                "  revenue_data = [100000, 80000, ...]\n\n"
+                                "❌ This is FAKE DATA. Dashboard will be MISLEADING.\n\n"
+                                "✅ USE REAL ANALYSIS RESULTS from previous execute:\n"
+                                "  top_products_data = top_products.index.tolist()  # From analysis\n"
+                                "  revenue_data = top_products.values.tolist()  # Real numbers\n\n"
+                                "REMEMBER: Variables (DataFrames, dicts) persist in kernel.\n"
+                                "Access them directly — no need to invent data.\n\n"
+                                "Rewrite execute using persisted variables. Execute quota NOT consumed.",
+                        tool_call_id=tool_call_id,
+                    )
+
             # Block network requests (urllib, requests, wget, curl)
             # Fonts are pre-installed in the Docker image
             net_patterns = ["urllib.request", "requests.get", "urlretrieve", "urlopen",
