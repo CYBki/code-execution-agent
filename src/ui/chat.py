@@ -120,12 +120,13 @@ class ExecuteStatusManager:
             label_text = f"{self._current_step_name} (Step {self._step_count}/~{self._step_count + 2})"
             state_class = "status-running"
         else:
-            # Completed state - no spinner
-            icon = "❌" if self._has_error else "✅"
+            # Completed state - use the state param (finalize passes "error" or "complete")
+            is_error = (state == "error")
+            icon = "❌" if is_error else "✅"
             spinner_html = icon
             time_str = f", {self._total_time:.1f}s" if self._total_time > 0 else ""
             label_text = f"Code Execution Complete ({self._step_count} steps{time_str})"
-            state_class = "status-error" if self._has_error else "status-complete"
+            state_class = "status-error" if is_error else "status-complete"
 
         # Use custom HTML for the header with rotating spinner
         with self._placeholder.container():
