@@ -163,7 +163,7 @@ If empty KPI cards or "undefined" errors appear:
 2. Fix: Build complete HTML string with all data embedded inside execute()
 3. Then pass the string to generate_html()
 
-## RULE 3: SCHEMA-FIRST
+## RULE 4: SCHEMA-FIRST
 MUST discover schema before analysis. NEVER guess column names.
 First tool is always `parse_file(file)` — doesn't consume execute quota, returns schema immediately.
 
@@ -238,7 +238,7 @@ Typical sequence: parse_file (once) → execute(read+clean) → execute(analysis
 Detailed workflow and analysis patterns → in file format skill (xlsx/csv).
 
 ## CORRECTION LOOP RULES
-- If validation fails or execute errors/blocks → max **2 correction attempts**
+- If validation fails or execute errors/blocks → max **3 correction attempts**
 - Each correction:
   THOUGHT: "❌ [X] failed because [Y]. Fix: [Z]"
   → execute(fix only the failed part)

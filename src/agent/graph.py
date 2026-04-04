@@ -106,10 +106,10 @@ def build_agent(
     _total_blocked = 0  # Track total blocked attempts to prevent infinite loops
     _MAX_BLOCKED = 4   # After this many blocks, stop blocking and let code through
     _last_execute_failed = False  # Track if previous execute had error/assertion
-    _correction_count = 0  # Track correction loop iterations (max 2)
-    _MAX_CORRECTIONS = 2
+    _correction_count = 0  # Track correction loop iterations (max 3)
+    _MAX_CORRECTIONS = 3
     _consecutive_blocks = 0  # Track consecutive blocks without execute
-    _MAX_CONSECUTIVE_BLOCKS = 2  # Circuit breaker: stop after 2 consecutive blocks
+    _MAX_CONSECUTIVE_BLOCKS = 3  # Circuit breaker: stop after 3 consecutive blocks
 
     def reset_interceptor_state():
         """Reset all interceptor counters for a new conversation turn.

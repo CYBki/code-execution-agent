@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-An AI agent that analyzes Excel, CSV, and PDF files using Claude Sonnet 4 + LangChain + Daytona sandboxed execution. The agent generates PDF reports and interactive HTML dashboards through a Streamlit interface.
+An AI agent that analyzes Excel, CSV, and PDF files using Claude Sonnet 4 + LangChain + OpenSandbox sandboxed execution. The agent generates PDF reports and interactive HTML dashboards through a Streamlit interface.
 
-**Tech Stack:** LangChain `create_agent`, Anthropic Claude, Daytona sandbox, Streamlit, DuckDB (large files), WeasyPrint (PDF generation)
+**Tech Stack:** LangChain `create_agent`, Anthropic Claude, OpenSandbox (persistent CodeInterpreter kernel), Streamlit, DuckDB (large files), WeasyPrint (PDF generation)
 
 ## Development Commands
 
@@ -18,44 +18,58 @@ pip install -e .
 
 # Configure API keys (.env file)
 ANTHROPIC_API_KEY=sk-ant-...
-DAYTONA_API_KEY=dtn_...
+OPEN_SANDBOX_API_KEY=local-sandbox-key-2024
 
 # Run application
 streamlit run app.py
 
 # The app runs at http://localhost:8501
-# First query takes ~30s while sandbox installs packages in background
+# First query is fast (~5s) — packages pre-installed in Docker image
 ```
 
 ## Critical Architecture Concepts
 
-### 1. Execute Isolation Pattern
+### 1. Persistent Kernel Pattern
 
-**Key insight:** Each `execute()` tool call runs in a separate Python subprocess on Daytona sandbox. Variables from Execute #1 don't exist in Execute #2.
+**Key insight:** `execute()` calls share a **persistent Python kernel** (OpenSandbox CodeInterpreter). Variables, imports, and DataFrames survive across calls within a session.
 
-**Data transfer between executes:**
-- **Small files (<40MB):** Use pickle
-  ```python
-  # Execute 1
-  df.to_pickle('/home/daytona/clean.pkl')
+**No pickle/serialization needed — variables persist:**
+```python
+# Execute #1: Read + clean (df stays in memory)
+df = pd.read_excel('/home/sandbox/data.xlsx')
+df = df.dropna(subset=['CustomerID'])
+df['Date'] = pd.to_datetime(df['Date'])
+print(f"✅ Loaded: {len(df):,} rows")
 
-  # Execute 2
-  df = pd.read_pickle('/home/daytona/clean.pkl')
-  ```
-- **Large files (≥40MB):** Use CSV → DuckDB
-  ```python
-  # Execute 1: Excel → CSV per sheet
-  for sheet in xls.sheet_names:
-      df = pd.read_excel(path, sheet_name=sheet)
-      df.to_csv(f'/home/daytona/temp_{sheet}.csv', index=False)
-      del df
+# Execute #2: df is STILL in memory (no re-read needed)
+m = {
+    'total_customers': df['CustomerID'].nunique(),
+    'total_revenue': (df['Quantity'] * df['Price']).sum(),
+}
+print(f"✅ Metrics calculated: {m}")
 
-  # Execute 2: DuckDB queries (csv_paths dict must be redeclared)
-  csv_paths = {'Sheet1': '/home/daytona/temp_Sheet1.csv', ...}
-  stats = duckdb.sql(f"SELECT ... FROM read_csv_auto('{csv_paths['Sheet1']}')")
-  ```
+# Execute #3: Both df and m are STILL available
+html = f"""<h3>Customers: {m['total_customers']:,}</h3>"""
+weasyprint.HTML(string=html).write_pdf('/home/sandbox/report.pdf')
+```
 
-All sandbox files live at `/home/daytona/`. Font files `DejaVuSans.ttf` and `DejaVuSans-Bold.ttf` are pre-installed there.
+**Exception:** `generate_html()` runs in a **separate process** — it cannot see Python variables. You must build the complete HTML string inside `execute()` and pass it as a literal string to `generate_html()`.
+
+**Large files (≥40MB):** DuckDB pattern is still valid and simplified:
+```python
+# Execute #1: Excel → CSV per sheet
+for sheet in xls.sheet_names:
+    df = pd.read_excel(path, sheet_name=sheet)
+    df.to_csv(f'/home/sandbox/temp_{sheet}.csv', index=False)
+    del df
+csv_paths = {'Sheet1': '/home/sandbox/temp_Sheet1.csv', ...}
+
+# Execute #2: DuckDB queries (csv_paths from Execute #1 still available)
+stats = duckdb.sql(f"SELECT ... FROM read_csv_auto('{csv_paths['Sheet1']}')")
+# No need to redeclare csv_paths — persistent kernel!
+```
+
+All sandbox files live at `/home/sandbox/`. Font files `DejaVuSans.ttf` and `DejaVuSans-Bold.ttf` are pre-installed there.
 
 ### 2. Smart Interceptor Layer
 
@@ -88,27 +102,17 @@ File uploaded → registry.py detects triggers → loader.py composes prompt
 - `≥40MB` or keyword "duckdb" → add `skills/xlsx/references/large_files.md`
 - `≥2 files` or keyword "join/merge" → add `skills/xlsx/references/multi_file_joins.md`
 
-Skill files contain domain-specific rules (pickle pattern, DuckDB strategy, WeasyPrint format, etc.).
+Skill files contain domain-specific rules (persistent kernel pattern, DuckDB strategy, WeasyPrint format, etc.).
 
 ### 4. Sandbox Lifecycle
 
 **Pre-warming** ([src/sandbox/manager.py](src/sandbox/manager.py)):
 - Browser opens → `init_session()` spawns background thread
-- Background thread: create/find sandbox → install packages (weasyprint, pandas, openpyxl, duckdb, etc.) → signal ready
-- User uploads file → `wait_until_ready(timeout=120s)` blocks until packages installed
-- Sandbox TTL: 3600s idle → auto-deleted
+- Background thread: create sandbox (~5s, packages pre-installed in Docker image) → signal ready
+- User uploads file → `wait_until_ready(timeout=30s)` blocks until sandbox ready
+- Sandbox TTL: 2 hours (configurable) → auto-deleted
 
-**Package installation happens once per sandbox**, not per query.
-
-**Cleanup stopped sandboxes** (Daytona has 30GiB disk limit):
-```bash
-# Interactive mode (shows summary, asks confirmation)
-python cleanup_sandboxes.py
-
-# Auto-confirm mode (for automation)
-python cleanup_sandboxes.py --yes
-```
-The script deletes stopped/archived/error sandboxes to free disk space.
+**Packages are pre-installed in Docker image**, not per query. First query is fast.
 
 ### 5. Agent Caching
 
@@ -139,11 +143,11 @@ Agent thread:                  Streamlit thread:
 | [app.py](app.py) | Entry point, validates API keys, renders UI |
 | [src/agent/graph.py](src/agent/graph.py) | Agent construction, smart_interceptor, middleware stack |
 | [src/agent/prompts.py](src/agent/prompts.py) | Base system prompt (Turkish, ReAct workflow, schema-first rules) |
-| [src/sandbox/manager.py](src/sandbox/manager.py) | Daytona lifecycle, package pre-warming, file upload |
+| [src/sandbox/manager.py](src/sandbox/manager.py) | OpenSandbox lifecycle, CodeInterpreter persistent kernel, file upload |
 | [src/skills/registry.py](src/skills/registry.py) | Skill triggers (file size, extension, keywords) |
 | [src/skills/loader.py](src/skills/loader.py) | Dynamic prompt composition |
 | [src/tools/file_parser.py](src/tools/file_parser.py) | Schema extraction (doesn't consume execute quota) |
-| [src/tools/execute.py](src/tools/execute.py) | Code execution via Daytona, base64 temp file pattern |
+| [src/tools/execute.py](src/tools/execute.py) | Code execution via OpenSandbox CodeInterpreter, persistent kernel |
 | [src/tools/artifact_store.py](src/tools/artifact_store.py) | Thread-safe bridge to Streamlit UI |
 | [src/ui/chat.py](src/ui/chat.py) | Chat rendering, streaming, agent invocation |
 | [src/ui/session.py](src/ui/session.py) | Session init, sandbox pre-warming thread |
@@ -163,7 +167,7 @@ html = f"""<!DOCTYPE html>
 <p>Müşteri Sayısı: <b>{m['customers']:,}</b></p>
 </body></html>"""
 
-weasyprint.HTML(string=html).write_pdf('/home/daytona/rapor.pdf')
+weasyprint.HTML(string=html).write_pdf('/home/sandbox/rapor.pdf')
 ```
 
 **Critical:** All metric calculations and PDF generation must happen in **same execute** block. Never hardcode numbers — always use `m = {...}` dict pattern.
@@ -194,12 +198,12 @@ The [src/agent/prompts.py](src/agent/prompts.py) enforces:
 
 | Issue | Cause | Solution |
 |-------|-------|----------|
-| Sandbox won't start | Daytona disk limit (30GiB) | Run `python cleanup_sandboxes.py --yes` |
+| Sandbox won't start | Docker disk space | Check Docker disk usage with `docker system df` |
 | `ModuleNotFoundError: deepagents` | Not installed | Run `pip install -e .` |
-| First query takes ~30s | Package installation running | Normal, prewarm not complete |
-| `KeyError: csv_paths` in Execute #2 | Execute isolation | Redeclare `csv_paths = {...}` in Execute #2 |
+| `ModuleNotFoundError` in sandbox | Package missing from Docker image | Sandbox image needs rebuild (contact dev team) |
 | Hardcoded numbers in PDF | Wrong pattern | Use `m = {...}` dict, calculate in same execute |
 | `MemoryError` on 40MB+ file | Using pandas instead of DuckDB | Check parse_file output for "BÜYÜK DOSYA" warning |
+| Empty KPI cards in dashboard | Variables not passed to generate_html | Build complete HTML string in execute(), pass literal string |
 
 ## Testing Workflow
 
@@ -213,7 +217,7 @@ The [src/agent/prompts.py](src/agent/prompts.py) enforces:
 ## Additional Documentation
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) — system diagrams, data flow, component interactions
-- [TECHNICAL_GUIDE.md](TECHNICAL_GUIDE.md) — pickle vs CSV patterns, DuckDB strategies, interceptor rules
+- [TECHNICAL_GUIDE.md](TECHNICAL_GUIDE.md) — persistent kernel patterns, DuckDB strategies, interceptor rules
 - [TEAM_GUIDE.md](TEAM_GUIDE.md) — onboarding guide, security decisions, deployment notes
 - [skills/xlsx/SKILL.md](skills/xlsx/SKILL.md) — Excel analysis rules, sheet detection, PDF format
 - [skills/xlsx/references/large_files.md](skills/xlsx/references/large_files.md) — DuckDB patterns for ≥40MB files
