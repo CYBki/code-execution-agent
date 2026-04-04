@@ -194,38 +194,68 @@ const revenueData = {top_products_revenue};  // ✅ From analysis
 '''
 ```
 
-**VERIFICATION:**
-Before generating dashboard, ALWAYS ask yourself:
-- [ ] Am I using variables from previous execute? (top_products, hourly_sales still in kernel)
-- [ ] Or am I inventing numbers? (if yes → STOP, use real data)
-- [ ] Do chart values match metrics in m dict? (consistency check)
+## RULE 3.5: ABSOLUTE BAN ON HARDCODED DASHBOARD DATA
 
-If you catch yourself writing `= [100, 200, 300]` without `.tolist()` from a DataFrame → STOP → Use persisted analysis.
+**THIS IS THE #1 MOST CRITICAL RULE FOR DASHBOARDS.**
+
+When building a dashboard with `publish_html()`, you MUST reference kernel variables directly.
+You must NEVER create new dicts/lists by copying numbers you saw in previous output.
+
+❌ **BANNED PATTERN — Copying numbers from output into new variables:**
+```python
+# Dashboard step — THIS IS ABSOLUTELY FORBIDDEN
+dashboard_metrics = {'total_customers': 5863, 'total_revenue': 17588623}  # ❌ HARDCODED!
+segment_data = [{'name': 'Champions', 'customers': 508, 'revenue': 9802691}]  # ❌ HARDCODED!
+hourly_data = [{'hour': 6, 'revenue': 890000}, {'hour': 7, 'revenue': 1200000}]  # ❌ FABRICATED!
+```
+
+✅ **CORRECT — Use kernel variables directly in the SAME execute that calls publish_html():**
+```python
+# Dashboard step — variables m, segment_summary, hourly_pattern already in kernel
+seg = segment_summary.reset_index()
+seg_names = seg['customer_segment'].tolist()
+seg_revenues = seg['toplam_ciro'].tolist()
+country_names = country_analysis['Country'].tolist()[:8]
+country_revs = country_analysis['toplam_ciro'].tolist()[:8]
+hourly_labels = hourly_pattern.index.astype(int).tolist()
+hourly_vals = hourly_pattern['ciro'].tolist()
+
+parts = []
+parts.append(f'<script>const segNames={seg_names};const segRevs={seg_revenues};</script>')
+publish_html('\\n'.join(parts))
+```
+
+**WHY THIS MATTERS:**
+- Hardcoded numbers can be WRONG (rounded, truncated, or fabricated)
+- The kernel has the EXACT computed values — use them
+- If a variable doesn't exist, COMPUTE it first in the same execute — don't invent approximate values
 
 **KERNEL CONFIDENCE — TRUST THE SYSTEM:**
 
-The persistent kernel is RELIABLE. Variables survive across execute() calls. You do NOT need defensive programming.
+The persistent kernel is RELIABLE. Variables survive across ALL execute() calls within the conversation.
+This includes across separate tool-call rounds. You do NOT need defensive programming.
 
-✅ **TRUST:**
-- DataFrame `df` from Execute #1 → available in Execute #2, #3, #4
-- Dict `m` from Execute #2 → available in Execute #3, #4
-- Series `top_products` from Execute #3 → available in Execute #4
+✅ **TRUST — These variables persist forever within the session:**
+- DataFrame `df` from Execute #1 → available in Execute #5, #6, #7, even #10
+- Dict `m` from Execute #3 → available in Execute #7 (dashboard step)
+- DataFrame `segment_summary` from Execute #3 → available in dashboard step
+- DataFrame `country_analysis` from Execute #5 → available in dashboard step
 - All imports persist (pandas, numpy, duckdb)
+- Even variables from a DIFFERENT tool-call round persist (the kernel never resets)
 
-❌ **NEVER do defensive copies:**
+❌ **NEVER re-create data as literals:**
 ```python
-# Execute #4 — WRONG
-top_products_data = ['Product A', 'Product B']  # ❌ Defensive fake data
-# "Just in case variables are gone" — NO! They are NOT gone.
+# WRONG — copying numbers you saw in previous output
+m = {'total_customers': 5863, 'total_revenue': 17588623}  # ❌ m already exists!
 ```
 
-✅ **CORRECT — Direct usage:**
+✅ **CORRECT — just use it:**
 ```python
-# Execute #4 — CORRECT
-top_products_data = top_products.index.tolist()  # ✅ Variables ARE there
+# m was defined in Execute #3 — it's STILL THERE
+parts.append(f'<div class="kpi">{m["total_customers"]:,}</div>')  # ✅
 ```
 
-**Remember:** If you wrote `top_products = ...` in Execute #3, it is STILL in memory in Execute #4. Use it directly. The kernel is persistent and reliable.
+**SELF-CHECK before dashboard step:** If you're about to write a number literal (like 5863, 9802691, 508) that came from a previous analysis → STOP → That variable is in the kernel → Use it directly.
 
 ## RULE 4: SCHEMA-FIRST
 MUST discover schema before analysis. NEVER guess column names.
@@ -245,23 +275,37 @@ This guarantees real data because you have direct access to all kernel variables
 
 ✅ **CORRECT — Dashboard inside execute (direct variable access):**
 ```python
-# Execute #4 — Dashboard (top_products, m, monthly_trend from previous steps)
+# Execute — Dashboard: m, segment_summary, country_analysis, hourly_pattern from previous steps
+# Step 1: Extract data from kernel variables (NOT from memory/output!)
+seg = segment_summary.reset_index()
+seg_names = seg['customer_segment'].tolist()
+seg_revs = seg['toplam_ciro'].tolist()
+c_names = country_analysis['Country'].tolist()[:8]
+c_revs = country_analysis['toplam_ciro'].tolist()[:8]
+h_labels = hourly_pattern.index.astype(int).tolist()
+h_vals = hourly_pattern['ciro'].tolist()
+
+# Step 2: Build HTML with Chart.js using REAL data from variables above
 parts = []
 parts.append('<html><head><script src="https://cdn.jsdelivr.net/npm/chart.js"></script></head><body>')
-parts.append(f'<script>const labels = {top_products.index.tolist()};')
-parts.append(f'const data = {top_products.values.tolist()};')
-parts.append(f'const monthlyRevenue = {monthly_trend["revenue"].tolist()};</script>')
+parts.append(f'<div class="kpi">{m["total_customers"]:,} Customers</div>')
+parts.append(f'<script>const segLabels={seg_names};const segData={seg_revs};</script>')
+parts.append(f'<script>const countryLabels={c_names};const countryData={c_revs};</script>')
+parts.append(f'<script>const hourLabels={h_labels};const hourData={h_vals};</script>')
 parts.append('</body></html>')
 publish_html('\\n'.join(parts))  # ✅ Auto-rendered in UI
 ```
 
-❌ **WRONG — generate_html with hardcoded data:**
+❌ **WRONG — Creating new variables with literal numbers:**
 ```python
-# generate_html with manually copied numbers — NEVER DO THIS
-generate_html('<script>const data = [100, 200, 300];</script>')
+# ABSOLUTELY FORBIDDEN — numbers copied from previous output
+dashboard_metrics = {'total_customers': 5863, 'total_revenue': 17588623}  # ❌
+segment_data = [{'name': 'X', 'customers': 508}]  # ❌
+hourly_data = [{'hour': 6, 'revenue': 890000}]  # ❌ FABRICATED!
 ```
 
 **RULE:** For any dashboard that uses analysis results → ALWAYS use `publish_html()` inside `execute()`.
+Use kernel variables directly (m, segment_summary, country_analysis, hourly_pattern, etc.).
 Only use `generate_html()` tool for purely static HTML with zero data dependency.
 
 ## File Access

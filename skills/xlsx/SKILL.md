@@ -172,22 +172,42 @@ Analysis and PDF generation MUST be completed in a **single execute**.
 `publish_html(html_string)` is pre-loaded in the persistent kernel.
 Call it inside your execute() code to render dashboards with **direct variable access**.
 
-**Variables persist across execute() calls (persistent kernel):**
-- m dict computed in execute #1 → available in execute #2+ ✅
-- df loaded in execute #1 → available in execute #2+ ✅
+**Variables persist across ALL execute() calls (persistent kernel):**
+- m dict computed in execute #3 → available in execute #7 (dashboard step) ✅
+- segment_summary from execute #3 → available in dashboard step ✅
+- country_analysis from execute #5 → available in dashboard step ✅
+- hourly_pattern from execute #4 → available in dashboard step ✅
+- Even across separate tool-call rounds — kernel NEVER resets
 
-**Correct pattern — publish_html inside execute (guaranteed real data):**
+**⛔ ABSOLUTE BAN — Never create new dicts/lists with literal numbers for dashboard:**
 ```python
-# Execute: build HTML using persisted variables (df, m already in kernel)
-m = {'total_orders': df['Invoice'].nunique(), ...}  # df from previous execute
-monthly_data = df.groupby('month')['revenue'].sum().tolist()
-
-html = f'<h3>{m["total_orders"]:,}</h3><script>const data = {monthly_data};</script>'
-publish_html(html)  # ✅ Auto-rendered in UI, no separate tool call needed
+# ❌ FORBIDDEN — copying numbers from previous output
+dashboard_metrics = {'total_customers': 5863, 'total_revenue': 17588623}  # HARDCODED!
+segment_data = [{'name': 'Champions', 'customers': 508}]  # HARDCODED!
+hourly_data = [{'hour': 6, 'revenue': 890000}]  # FABRICATED!
 ```
 
+**✅ CORRECT — Reference kernel variables directly:**
+```python
+# Dashboard step — m, segment_summary, country_analysis, hourly_pattern in kernel
+seg = segment_summary.reset_index()
+seg_names = seg['customer_segment'].tolist()
+seg_revs = seg['toplam_ciro'].tolist()
+c_names = country_analysis['Country'].tolist()[:8]
+c_revs = country_analysis['toplam_ciro'].tolist()[:8]
+h_labels = hourly_pattern.index.astype(int).tolist()
+h_vals = hourly_pattern['ciro'].tolist()
+
+parts = []
+parts.append(f'<div>{m["total_customers"]:,}</div>')
+parts.append(f'<script>const seg={seg_names};const segR={seg_revs};</script>')
+publish_html('\\n'.join(parts))  # ✅ Real data, auto-rendered
+```
+
+**SELF-CHECK:** If you're about to write a number literal (5863, 9802691) → STOP → that variable is in the kernel → use it.
+
 **RULE:** For any dashboard that uses analysis results → ALWAYS use `publish_html()` inside `execute()`.
-Only use `generate_html()` tool for purely static HTML with zero data dependency.
+Use kernel variables directly. Only use `generate_html()` for purely static HTML with zero data dependency.
 
 ## Quick Start
 
