@@ -1,7 +1,7 @@
 # Architecture Diagram
 
-> **Last Updated:** 2026-03-31
-> **Version:** 1.2 (with tool output persistence & execute isolation self-check)
+> **Last Updated:** 2026-04-04
+> **Version:** 1.3 (with persistent kernel + tool output persistence)
 
 ## 🎯 End-to-End Flow (60 Second Overview)
 
@@ -10,7 +10,7 @@
                 ↓
 2. Skill System detects: .xlsx + ≥40MB → loads skills/xlsx/SKILL.md + large_files.md
                 ↓
-3. Background Thread: Daytona sandbox creates + installs packages (weasyprint, pandas, duckdb)
+3. Background Thread: OpenSandbox creates (~5s, packages pre-installed in Docker image)
                 ↓
 4. User asks: "Aylık satış trendini analiz et, PDF rapor ver"
                 ↓
@@ -48,7 +48,7 @@
 7. [Message Deduplication](#message-deduplication-rendered_ids-set) — rendered_ids set (NEW)
 8. [Thread-Safe Artifacts](#thread-safe-artifact-passing) — ArtifactStore pattern
 9. [Progressive Disclosure](#progressive-disclosure-flow-skill-loading) — Skill loading triggers
-10. [Execute Isolation](#execute-to-execute-data-flow-pickle-pattern) — Pickle pattern + self-check (NEW)
+10. [Persistent Kernel](#persistent-kernel-data-flow) — Variables survive across executes (UPDATED)
 11. [Module Dependencies](#module-dependency-graph) — Import graph
 12. [Configuration](#key-configuration) — Model, timeouts, limits, paths
 13. [Pre-installed Packages](#pre-installed-packages-sandbox) — Critical vs Optional split (UPDATED)
@@ -57,27 +57,28 @@
 
 ## Quick Summary
 
-**What:** AI agent that analyzes Excel/CSV/PDF files using Claude Sonnet 4 + LangChain + Daytona sandboxed execution. Generates PDF reports and interactive HTML dashboards via Streamlit.
+**What:** AI agent that analyzes Excel/CSV/PDF files using Claude Sonnet 4 + LangChain + OpenSandbox sandboxed execution. Generates PDF reports and interactive HTML dashboards via Streamlit.
 
 **Tech Stack:**
 - **Frontend:** Streamlit (chat UI + file upload)
 - **Agent:** LangChain `create_agent` + Claude Sonnet 4 (ReAct pattern)
-- **Execution:** Daytona sandbox (isolated Python subprocess per execute)
+- **Execution:** OpenSandbox (persistent CodeInterpreter kernel)
 - **Storage:** LangGraph MemorySaver (conversation state per thread_id)
 - **Skills:** Progressive disclosure (load based on file type/size/keywords)
 
 **Key Features:**
 - 📋 **Tool Output Persistence**: Execute/parse_file outputs saved in chat history (call_id matching)
-- 🔒 **Execute Isolation**: Each execute() = separate subprocess, variables don't carry over
+- 🔒 **Persistent Kernel**: Variables, imports, DataFrames survive across execute() calls
 - 🛡️ **Smart Interceptor**: Blocks shell commands, pip install, network requests, sampling
-- 🚀 **Package Pre-warming**: Background thread installs packages while UI loads
-- 🎯 **Self-Verification**: Agent checks variable scope before artifact generation (RULE 3)
+- 🚀 **Fast Startup**: Packages pre-installed in Docker image (~5s sandbox creation)
+- 🎯 **Self-Verification**: Agent builds complete HTML strings before generate_html()
 
 **Critical Patterns:**
-1. **Pickle Pattern**: Execute #1 saves to `/home/daytona/clean.pkl` → Execute #2 reads it
+1. **Persistent Kernel**: Variables (df, m, imports) survive across execute() calls — no pickle needed
 2. **DuckDB Pattern**: Files ≥40MB → Excel→CSV→DuckDB (lazy queries)
 3. **Metric Dict**: All calculations in SAME execute as PDF/HTML generation
 4. **Deduplication**: `rendered_ids` set prevents message replay during streaming
+5. **generate_html Exception**: Runs in separate process — pass complete HTML strings
 
 ## System Overview
 
@@ -94,7 +95,7 @@
 │  │              │  │  ├─ 🐍 Running code...        ✓                 │  │
 │  │ Model: Claude│  │  ├─ 🌐 Generating HTML...     ✓                 │  │
 │  │ Sandbox:     │  │  ├─ 🐍 Creating PDF...       ✓                 │  │
-│  │   Daytona    │  │  ├─ 📥 Preparing download...  ✓                 │  │
+│  │ OpenSandbox  │  │  ├─ 📥 Preparing download...  ✓                 │  │
 │  └──────────────┘  │  └─ 💬 Streaming response...                    │  │
 │                     │                                                  │  │
 │                     │  [📊 HTML Dashboard — interactive iframe]        │  │
@@ -171,7 +172,7 @@
 │  │       • BLOCKS: nrows≤10 schema re-check after parse_file ran     │  │
 │  │         → redirects agent to CSV conversion immediately            │  │
 │  │       • BLOCKS: duplicate parse_file (path normalized) → CSV code │  │
-│  │         (strips /home/daytona/ prefix for duplicate detection)    │  │
+│  │         (strips /home/sandbox/ prefix for duplicate detection)    │  │
 │  │       • BLOCKS: execute > 6 simple / 10 complex (dynamic limit)   │  │
 │  │       • CIRCUIT BREAKER: stops after 2 consecutive blocks to      │  │
 │  │         prevent infinite loops (parse_file→ls→parse_file→...)     │  │
@@ -217,47 +218,44 @@
    st.session_state["uploaded_files"]  (reads file bytes directly)
 
 ┌──────────────────────────────────────────────────────────────────────────┐
-│              DAYTONA SANDBOX — LangChain-Daytona backend                 │
+│            OPENSANDBOX — CodeInterpreter Persistent Kernel               │
 │                       (src/sandbox/manager.py)                           │
 │                                                                          │
 │  ┌────────────────────────────────────────────────────────────────────┐  │
 │  │  SandboxManager                                                    │  │
 │  │                                                                    │  │
 │  │  Lifecycle:                                                        │  │
-│  │  • _find_existing(thread_id)   — list by label, skip DESTROYED     │  │
-│  │  • get_or_create_sandbox()     — find or create + _ensure_started  │  │
-│  │  • _ensure_started()           — handle STOPPED/ARCHIVED states    │  │
-│  │  • stop() + atexit cleanup     — graceful shutdown                 │  │
+│  │  • get_or_create_sandbox() — create new or reuse cached           │  │
+│  │  • _create_new_sandbox()   — SandboxSync.create() + CodeInterpreter│  │
+│  │  • clean_workspace()       — rm files + reset Python context      │  │
+│  │  • stop() + __del__        — cleanup (not guaranteed)             │  │
 │  │                                                                    │  │
-│  │  DaytonaSandbox (shared): timeout=180s, same instance for agent   │  │
-│  │                            AND _install_packages (ensures pkgs     │  │
-│  │                            are visible to agent code)             │  │
+│  │  OpenSandboxBackend: Wraps SandboxSync + CodeInterpreterSync      │  │
+│  │                      Persistent Python context (_py_context)      │  │
 │  │                                                                    │  │
-│  │  Background Package Install (_install_packages in daemon thread):  │  │
+│  │  Fast Startup (packages pre-installed in Docker image):           │  │
 │  │  ┌──────────────────────────────────────────────────────────────┐  │  │
-│  │  │  Phase 1 (FONTS):     cp /usr/share/fonts/truetype/dejavu/  │  │  │
-│  │  │                       → /home/daytona/DejaVuSans*.ttf       │  │  │
-│  │  │  Phase 2 (PACKAGES):  fpdf2, pandas, openpyxl, xlsxwriter,  │  │  │
-│  │  │                       numpy, matplotlib, seaborn, plotly,   │  │  │
-│  │  │                       pdfplumber, duckdb, scipy, scikit-learn│  │  │
-│  │  │  Phase 3 (VERIFY):    python3 -c 'import fpdf, pandas,      │  │  │
-│  │  │                       openpyxl; print("VERIFY_OK")'          │  │  │
+│  │  │  Image: agentic-sandbox:v1                                   │  │  │
+│  │  │  Pre-installed: weasyprint, pandas, openpyxl, duckdb,        │  │  │
+│  │  │                 fpdf2, numpy, matplotlib, seaborn, plotly,   │  │  │
+│  │  │                 scipy, scikit-learn, xlsxwriter, pdfplumber, │  │  │
+│  │  │                 python-pptx                                   │  │  │
+│  │  │  Fonts: /home/sandbox/DejaVuSans*.ttf (pre-copied)           │  │  │
 │  │  │                                                              │  │  │
-│  │  │  Strategy: ONE package per pip install + exit code check     │  │  │
-│  │  │  Total install time: ~35s                                    │  │  │
-│  │  │  _packages_ready.set() in finally block (always fires)      │  │  │
+│  │  │  Sandbox creation: ~5s (no pip install wait)                 │  │  │
+│  │  │  _packages_ready.set() immediately                           │  │  │
 │  │  └──────────────────────────────────────────────────────────────┘  │  │
 │  │                                                                    │  │
 │  │  File Upload:                                                      │  │
-│  │  • Native: backend.upload_files([(path, bytes)])  (best for large) │  │
-│  │  • Fallback: chunked base64+execute (512KB chunks)                │  │
-│  │  • Runs after wait_until_ready(timeout=120)                        │  │
+│  │  • backend.upload_files([(path, bytes)])                          │  │
+│  │  • Uses SandboxSync.files.write_files() (WriteEntry list)         │  │
+│  │  • Runs after wait_until_ready(timeout=30)                        │  │
 │  │                                                                    │  │
 │  │  Sandbox Config:                                                   │  │
-│  │  • Home: /home/daytona                                             │  │
-│  │  • Labels: {"thread_id": session_id}                               │  │
-│  │  • auto_delete_interval: 3600s (1 hour TTL)                        │  │
-│  │  • Pre-downloaded fonts at /home/daytona/DejaVuSans*.ttf           │  │
+│  │  • Home: /home/sandbox                                             │  │
+│  │  • Timeout: 2 hours (configurable)                                 │  │
+│  │  • Persistent kernel: variables survive across execute() calls    │  │
+│  │  • Context reset: clean_workspace() creates new py_context        │  │
 │  └────────────────────────────────────────────────────────────────────┘  │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
@@ -279,7 +277,7 @@
 │ uploads  │──▶│                                                   │
 │ file +   │   │  1. Store in session_state["uploaded_files"]      │
 │ query    │   │  2. get_or_build_agent() [cached by fingerprint]  │
-│          │   │  3. wait_until_ready(120s) — block for packages   │
+│          │   │  3. wait_until_ready(30s) — block for sandbox     │
 │          │   │  4. upload_files() — base64 push to sandbox       │
 └──────────┘   │  5. agent.stream(query) with stream_mode=updates  │
                └───────────────────────┬──────────────────────────┘
@@ -290,7 +288,7 @@
                │                                                    │
                │  Ideal flow — small file (<40MB):                  │
                │  ① parse_file → schema + file_size_mb              │
-               │  ② execute(clean + pickle)                         │
+               │  ② execute(read + clean) — df persists in kernel   │
                │  ③ execute(analysis + m dict + WeasyPrint PDF)     │
                │  ④ download_file(pdf_path)                         │
                │                                                    │
@@ -390,29 +388,21 @@
 │     │                                                            │
 │     ├─ session_state defaults: messages=[], uploaded_files=[]     │
 │     ├─ session_id = uuid4()                                      │
-│     ├─ SandboxManager() → self._client = Daytona()               │
+│     ├─ SandboxManager() → self._backend = None (lazy init)       │
 │     │                                                            │
 │     └─ Background Thread (_prewarm):                             │
 │        ├─ get_or_create_sandbox(session_id)                      │
-│        │   ├─ _find_existing(thread_id) → list by label          │
-│        │   ├─ OR create(labels={"thread_id":...}, TTL=3600s)     │
-│        │   ├─ _ensure_started() → handle STOPPED/ARCHIVED        │
-│        │   └─ self._backend = DaytonaSandbox(timeout=180)        │
+│        │   └─ _create_new_sandbox():                             │
+│        │       ├─ SandboxSync.create("agentic-sandbox:v1")       │
+│        │       ├─ CodeInterpreterSync.create(sandbox)            │
+│        │       ├─ codes.create_context(PYTHON) — persistent      │
+│        │       └─ OpenSandboxBackend(sandbox, interpreter, ctx)  │
 │        │                                                         │
-│        └─ _install_packages (daemon thread):                     │
-│           ├─ Phase 1: DejaVuSans fonts + system deps (~3s)       │
-│           ├─ Phase 2: check installed packages, pip missing only │
-│           │   • Critical (blocks ready): weasyprint, pandas,     │
-│           │     openpyxl, xlsxwriter, numpy, matplotlib,         │
-│           │     seaborn, plotly, scipy, scikit-learn             │
-│           │   • Optional (background): pdfplumber, duckdb,       │
-│           │     python-pptx (moved: rarely used, ~15-20s)        │
-│           ├─ Phase 3: verify critical imports (must succeed)     │
-│           │   → import weasyprint, pandas, openpyxl (NOT pptx)   │
-│           └─ _packages_ready.set() [only if verification OK]     │
+│        └─ _packages_ready.set() immediately                      │
+│           (packages pre-installed in Docker image, ~5s total)    │
 │                                                                  │
 │  atexit.register(mgr.stop) — cleanup on process exit             │
-│  Daytona auto_delete_interval=3600 — orphan TTL cleanup          │
+│  Sandbox timeout: 2 hours (configurable)                         │
 └──────────────────────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────────────────────┐
@@ -615,9 +605,9 @@ app.py
       ├── src/tools/download_file.py     DAYTONA: download_files() → ArtifactStore
       ├── src/tools/artifact_store.py    Thread-safe global store (Lock + lists)
       │
-      └── src/sandbox/manager.py         Daytona lifecycle: create/find/start/stop + TTL
-           ├── daytona                   Daytona SDK (Daytona, CreateSandboxFromSnapshotParams)
-           └── langchain-daytona         DaytonaSandbox (Deep Agents native backend)
+      └── src/sandbox/manager.py         OpenSandbox lifecycle: create/clean/stop + persistent kernel
+           ├── opensandbox               OpenSandbox SDK (SandboxSync)
+           └── code_interpreter          CodeInterpreterSync (persistent Python context)
 ```
 
 ## Key Configuration
@@ -631,12 +621,12 @@ app.py
 | execute timeout (agent)  | 180s                           | manager.py       |
 | execute timeout (install)| 60s                            | manager.py       |
 | max execute calls        | 6 simple / 10 complex (dynamic)| graph.py         |
-| sandbox TTL              | 3600s                          | manager.py       |
+| sandbox timeout          | 2 hours (7200s)                | manager.py       |
 | sandbox home             | `/home/daytona`                | manager.py       |
-| font path (regular)      | `/home/daytona/DejaVuSans.ttf` | prompts.py       |
-| font path (bold)         | `/home/daytona/DejaVuSans-Bold.ttf` | prompts.py  |
-| wait_until_ready timeout | 120s                           | chat.py          |
-| API keys                 | ANTHROPIC_API_KEY, DAYTONA_API_KEY | config.py    |
+| font path (regular)      | `/home/sandbox/DejaVuSans.ttf` | prompts.py       |
+| font path (bold)         | `/home/sandbox/DejaVuSans-Bold.ttf` | prompts.py  |
+| wait_until_ready timeout | 30s                            | chat.py          |
+| API keys                 | ANTHROPIC_API_KEY, OPEN_SANDBOX_API_KEY | config.py    |
 
 ## Pre-installed Packages (Sandbox)
 
@@ -650,7 +640,7 @@ app.py
 
 ## Sandbox Disk Management
 
-Daytona has a 30GiB total disk limit across all sandboxes. Stopped sandboxes still consume disk.
+Docker container disk space is managed per sandbox. Sandboxes are automatically cleaned up after timeout (2 hours default).
 
 ```python
 # Manual cleanup — delete all stopped sandboxes
@@ -666,69 +656,87 @@ for s in sandboxes:
 `auto_delete_interval=3600` in `CreateSandboxFromSnapshotParams` handles idle TTL,
 but manually calling `d.delete()` is needed when disk limit is hit.
 
-## Execute-to-Execute Data Flow (Pickle Pattern)
+## Persistent Kernel Data Flow
+
+**Key Insight:** execute() calls share a **persistent Python kernel** (CodeInterpreter). Variables, imports, and DataFrames survive across calls.
 
 ```
-Execute 1 (clean + save):          Execute 2 (analyze + PDF):
-  df = pd.read_excel(path)           df = pd.read_pickle('/home/daytona/clean.pkl')
-  df.dropna(...)                     m = { 'total': df['col'].nunique() }
-  df.to_pickle('/home/daytona/       html = f"...{m['total']}..."
-    clean.pkl')                      weasyprint.HTML(...).write_pdf(...)
-  del df  ← RAM freed               ← SAME process, no hardcoding
+Execute #1 (read + clean):         Execute #2 (analyze):
+  df = pd.read_excel(path)           # df STILL in memory from Execute #1
+  df.dropna(...)                     m = {'total': df['col'].nunique()}
+  print(f"✅ {len(df)} rows")        print(f"✅ Metrics: {m}")
      │
-     └── /home/daytona/clean.pkl ──▶ persists on Daytona disk
-
-For DuckDB (≥40MB): CSV replaces pickle
-  Execute 1: df.to_csv('/home/daytona/temp_sheet.csv'); del df
-  Execute 2: duckdb.sql("SELECT ... FROM read_csv_auto('...csv')")
+     └── df persists in kernel ──▶  Execute #3 (PDF):
+                                     # Both df and m STILL available
+                                     html = f"<h3>{m['total']:,}</h3>"
+                                     weasyprint.HTML(...).write_pdf(...)
 ```
 
-## Execute Isolation Self-Check (NEW - commit b0ebf82)
+**No pickle needed** — variables survive across execute() calls automatically.
 
-**Critical Pattern:** Each execute() runs in a SEPARATE Python subprocess. Variables DO NOT carry over.
+**DuckDB pattern (≥40MB) simplified:**
+```
+Execute #1: Excel → CSV + csv_paths dict
+  for sheet in sheets:
+      df = pd.read_excel(path, sheet_name=sheet)
+      df.to_csv(f'/home/sandbox/temp_{sheet}.csv', index=False)
+  csv_paths = {'Sheet1': '/home/sandbox/temp_Sheet1.csv', ...}
 
-**Common Bug (auto-detected now):**
+Execute #2: DuckDB queries
+  # csv_paths from Execute #1 STILL available (persistent kernel)
+  stats = duckdb.sql(f"SELECT ... FROM read_csv_auto('{csv_paths['Sheet1']}')")
+```
+
+## generate_html Isolation (UPDATED - persistent kernel)
+
+**Exception:** `generate_html()` runs in a **separate process** — it CANNOT see Python variables.
+
+**Common Bug:**
 ```
 Execute #1:
   m = {'total_orders': 36969, 'revenue': 17743429.18}
-  print('Metrics calculated')
+  # m persists in kernel (correct)
 
-Execute #2:  ← NEW subprocess!
-  html = f"<h3>{m['total_orders']}</h3>"  ← NameError: m undefined
-  generate_html(html_code=html)
-  Result: Empty KPI cards in dashboard
+Separate tool call:
+  generate_html(html_code=f"<h3>{m['total_orders']}</h3>")
+  # ❌ WRONG: generate_html() cannot see m (separate process)
+  Result: Empty KPI cards
 ```
 
 **Correct Pattern (enforced by RULE 3):**
 ```
 Single Execute:
-  df = pd.read_pickle('/home/daytona/clean.pkl')
+  df = pd.read_excel('/home/sandbox/data.xlsx')  # or reuse from earlier execute
   m = {'total': df['amount'].sum(), 'avg': df['amount'].mean()}
   chart_data = df.groupby('month')['revenue'].sum().tolist()
 
+  # Build complete HTML string with all data embedded
   html = f'''
-  <h3>{m['total']:,}</h3>  ← m defined in THIS scope
-  <script>const data = {chart_data};</script>  ← chart_data defined
+  <h3>{m['total']:,}</h3>  ← Literal value embedded
+  <script>const data = {chart_data};</script>  ← Literal array
   '''
+  
+  # NOW pass complete string to generate_html
   generate_html(html_code=html)
 ```
 
 **Agent Self-Verification (prompts.py RULE 3):**
 
-Before generate_html() or PDF generation:
-1. Check: Are ALL variables (m dict, chart arrays, dataframes) in current scope?
-2. If NO → merge calculations into this execute OR recalculate here
-3. Never assume previous execute variables will "just work"
+Before generate_html():
+1. Build complete HTML string inside execute() with all data as literals
+2. Pass the complete string to generate_html()
+3. Never pass variable references expecting generate_html to resolve them
 
-**Self-Correction Trigger:**
-If user reports empty dashboard/PDF → immediately recognize as execute
-isolation violation and regenerate with single-execute pattern.
+**Key difference from old pattern:**
+- execute() → execute(): Variables DO persist (persistent kernel)
+- execute() → generate_html(): Variables DO NOT persist (separate process)
 
 ## Recent Updates (Last 10 Commits)
 
 | Commit | Date | Change |
 |--------|------|--------|
-| b0ebf82 | 2026-03-31 | **Execute Isolation Self-Check**: Added RULE 3 pre-flight checklist before artifact generation |
+| 391cf29 | 2026-04-04 | **Persistent Kernel Documentation**: Fixed docs to match OpenSandbox reality (no pickle, variables persist) |
+| b0ebf82 | 2026-03-31 | **generate_html Isolation Check**: Added RULE 3 pre-flight for HTML string building |
 | af46e37 | 2026-03-31 | **python-pptx → Optional**: Moved from critical to optional packages (prevents timeout) |
 | 07c3123 | 2026-03-31 | **Tool Output Persistence**: call_id matching system to persist execute/parse_file outputs |
 | ee097d5 | 2026-03-31 | **Deduplication**: rendered_ids set in session_state prevents history replay |
@@ -741,7 +749,7 @@ isolation violation and regenerate with single-execute pattern.
 | File | İçerik |
 |---|---|
 | `ARCHITECTURE.md` | **[THIS FILE]** Sistem mimarisi, bileşenler, veri akışı, interceptor kuralları, message persistence, execute isolation |
-| `TECHNICAL_GUIDE.md` | Teknik detaylar: pickle/CSV pattern, execute izolasyonu, skill sistemi, ArtifactStore, disk yönetimi |
+| `TECHNICAL_GUIDE.md` | Teknik detaylar: persistent kernel patterns, DuckDB stratejileri, skill sistemi, ArtifactStore |
 | `CLAUDE.md` | **[START HERE]** Quick start, critical patterns (execute isolation, ReAct loop), common issues, testing workflow |
 | `skills/xlsx/SKILL.md` | Excel analiz kuralları, sheet tespiti, pivot format, WeasyPrint PDF, DuckDB stratejileri, **self-check** |
 | `skills/xlsx/references/large_files.md` | ≥40MB dosyalar: Excel→CSV→DuckDB, UNION ALL, multi-sheet pattern |
@@ -897,7 +905,7 @@ execute("df['InvoiceDate'] = pd.to_datetime(...)")  ← English code
 **Decision:** Agent has NO access to os.listdir, glob, pathlib
 
 **Why:**
-- File paths are deterministic: `/home/daytona/{uploaded_filename}`
+- File paths are deterministic: `/home/sandbox/{uploaded_filename}`
 - parse_file already provides schema → no need to "discover" files
 - Prevents exploration waste: agent can't wander filesystem
 
