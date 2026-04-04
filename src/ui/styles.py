@@ -1,6 +1,21 @@
 """Custom CSS for Claude-like appearance — dark code blocks, step timeline, tool cards."""
 
 CUSTOM_CSS = """
+<script>
+// Inject CSS into <head> immediately to prevent white flash
+(function() {
+    const style = document.createElement('style');
+    style.innerHTML = `
+        section[data-testid="stSidebar"],
+        section[data-testid="stSidebar"] > div,
+        section[data-testid="stSidebar"] * {
+            background-color: #1e293b !important;
+            transition: none !important;
+        }
+    `;
+    document.head.insertBefore(style, document.head.firstChild);
+})();
+</script>
 <style>
 /* ── Global ── */
 .stApp {
@@ -318,14 +333,29 @@ CUSTOM_CSS = """
     margin: 2px 0;
 }
 
-/* ── Sidebar styling (force dark background - aggressive) ── */
+/* ── Sidebar styling (force dark background - aggressive + no flash) ── */
+/* Kill transitions to prevent white flash */
 section[data-testid="stSidebar"],
+section[data-testid="stSidebar"] *,
+[data-testid="stSidebar"],
+[data-testid="stSidebar"] * {
+    transition: none !important;
+    animation: none !important;
+}
+
+/* Force dark background with maximum specificity */
+section[data-testid="stSidebar"],
+section[data-testid="stSidebar"] > div,
+section[data-testid="stSidebar"] > div > div,
 [data-testid="stSidebar"],
 [data-testid="stSidebar"] > div,
 [data-testid="stSidebar"] > div > div,
 [data-testid="stSidebar"] .block-container,
-[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
+[data-testid="stSidebar"] [data-testid="stVerticalBlock"],
+.css-1d391kg,  /* Streamlit internal sidebar class */
+.st-emotion-cache-1cypcdb {  /* Another Streamlit sidebar class */
     background-color: #1e293b !important;
+    background: #1e293b !important;
 }
 
 /* Force dark background on all sidebar children */
