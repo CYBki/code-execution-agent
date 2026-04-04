@@ -207,64 +207,60 @@ def build_agent(
                     tool_call_id=tool_call_id,
                 )
 
-            # Detect hardcoded dashboard data (SCENARIO-INDEPENDENT)
-            # Instead of checking specific variable names, detect the PATTERN:
-            # publish_html present + dict/list literals with large numbers + NO data access ops
+            # Detect hardcoded data (SCENARIO-INDEPENDENT, PER-ASSIGNMENT check)
+            # Key insight: check each dict/list assignment INDIVIDUALLY for data access,
+            # NOT the whole code block. Agent mixes duckdb.sql() + hardcoded m={...}
+            # in same execute — global check lets hardcoding slip through.
             import re
             _data_access_ops = (".tolist()", ".values", "groupby", ".reset_index()",
                                 ".to_dict(", ".iloc[", ".loc[", "duckdb.sql",
                                 ".sum()", ".mean()", ".count()", ".nunique()",
                                 ".sort_values(", ".nlargest(", ".nsmallest(",
-                                ".apply(", ".agg(", ".pivot")
-            _has_data_access = any(da in cmd for da in _data_access_ops)
+                                ".apply(", ".agg(", ".pivot", ".fetchone()",
+                                ".fetchall()", ".df()")
 
-            if not _has_data_access and "publish_html" in cmd:
-                # Dashboard code WITHOUT any data access → likely hardcoded
-                # Check for dict literals with numbers ≥3 digits: var = {...1234...}
-                _dict_with_nums = re.search(r'\w+\s*=\s*\{[^}]*\b\d{3,}\b[^}]*\}', cmd)
-                # Check for list-of-dict literals: var = [{...1234...}]
-                _list_dicts_nums = re.search(r'\w+\s*=\s*\[\s*\{[^\]]*\b\d{3,}\b', cmd)
-                # Check for list of large numbers: var = [1234, 5678, 9012]
-                _list_of_nums = re.search(r'\w+\s*=\s*\[\d{3,}(?:\s*,\s*\d{3,}){2,}', cmd)
+            def _is_hardcoded_assignment(match_text):
+                """Check if a specific assignment uses data access ops."""
+                return not any(da in match_text for da in _data_access_ops)
 
-                if _dict_with_nums or _list_dicts_nums or _list_of_nums:
-                    logger.warning("[Tool] BLOCKED: hardcoded data in publish_html dashboard")
-                    _execute_count -= 1  # Don't count
-                    return ToolMessage(
-                        content="⚠️ HARDCODED DASHBOARD DATA DETECTED\n\n"
-                                "Your dashboard code contains dict/list literals with numeric values\n"
-                                "but NO DataFrame operations (.tolist(), .values, .reset_index(), etc.).\n\n"
-                                "❌ This means you are COPYING numbers from memory instead of using kernel variables.\n\n"
-                                "✅ FIX: Use kernel variables directly. They persist across ALL execute calls:\n"
-                                "  # Extract data from kernel DataFrames/dicts:\n"
-                                "  labels = df_result['column'].tolist()\n"
-                                "  values = df_result['metric'].tolist()\n"
-                                "  kpi_value = m['key_name']  # m dict from previous step\n\n"
-                                "  # Then embed in HTML:\n"
-                                "  parts.append(f'<script>const data={values};</script>')\n"
-                                "  publish_html('\\n'.join(parts))\n\n"
-                                "REMEMBER: ALL variables from previous execute steps are still in kernel.\n"
-                                "Rewrite using .tolist()/.values on kernel variables. Execute quota NOT consumed.",
-                        tool_call_id=tool_call_id,
-                    )
+            # Find ALL dict assignments with large numbers: var = {...1234...}
+            _hc_dicts = [m for m in re.finditer(
+                r'\w+\s*=\s*\{[^}]*\b\d{3,}\b[^}]*\}', cmd
+            ) if _is_hardcoded_assignment(m.group())]
 
-            # Also block hardcoded data even WITHOUT publish_html (PDF, generate_html scenarios)
-            if not _has_data_access:
-                _dict_with_nums = re.search(r'\w+\s*=\s*\{[^}]*\b\d{4,}\b[^}]*\}', cmd)
-                _list_dicts_nums = re.search(r'\w+\s*=\s*\[\s*\{[^\]]*\b\d{4,}\b', cmd)
-                _list_of_nums = re.search(r'\w+\s*=\s*\[\d{4,}(?:\s*,\s*\d{4,}){2,}', cmd)
-                if _dict_with_nums or _list_dicts_nums or _list_of_nums:
-                    logger.warning("[Tool] BLOCKED: hardcoded data literals (no publish_html)")
-                    _execute_count -= 1
-                    return ToolMessage(
-                        content="⚠️ HARDCODED DATA DETECTED\n\n"
-                                "Your code contains dict/list literals with large numbers\n"
-                                "but NO DataFrame operations (.tolist(), .groupby(), etc.).\n\n"
-                                "❌ Numbers must be COMPUTED from data, not copied from memory.\n\n"
-                                "✅ Use kernel variables: m['key'], df.groupby(...)['col'].sum().tolist()\n"
-                                "Execute quota NOT consumed.",
-                        tool_call_id=tool_call_id,
-                    )
+            # Find ALL list-of-dict assignments: var = [{...1234...}]
+            _hc_list_dicts = [m for m in re.finditer(
+                r'\w+\s*=\s*\[\s*\{[^\]]*\b\d{3,}\b[^\]]*\]', cmd
+            ) if _is_hardcoded_assignment(m.group())]
+
+            # Find ALL list-of-numbers: var = [1234, 5678, 9012]
+            _hc_lists = [m for m in re.finditer(
+                r'\w+\s*=\s*\[\d{3,}(?:\s*,\s*\d{3,}){2,}[^\]]*\]', cmd
+            ) if _is_hardcoded_assignment(m.group())]
+
+            _all_hardcoded = _hc_dicts + _hc_list_dicts + _hc_lists
+            if _all_hardcoded:
+                examples = [m.group()[:60] for m in _all_hardcoded[:3]]
+                examples_str = "\n  ".join(examples)
+                logger.warning("[Tool] BLOCKED: %d hardcoded assignments: %s",
+                               len(_all_hardcoded), examples)
+                _execute_count -= 1  # Don't count
+                return ToolMessage(
+                    content=f"⚠️ HARDCODED DATA DETECTED ({len(_all_hardcoded)} assignments)\n\n"
+                            f"These assignments contain literal numbers without data operations:\n"
+                            f"  {examples_str}\n\n"
+                            "❌ Numbers must come from kernel variables, NOT copied from output.\n\n"
+                            "✅ FIX: Use kernel variables directly:\n"
+                            "  labels = df_result['column'].tolist()  # .tolist() from kernel\n"
+                            "  values = df_result['metric'].tolist()  # .tolist() from kernel\n"
+                            "  kpi = m['key_name']  # m dict from previous step\n\n"
+                            "  # For dicts — compute from data:\n"
+                            "  m = {'total': df['col'].nunique(), 'revenue': df['rev'].sum()}\n\n"
+                            "REMEMBER: ALL variables from previous execute steps persist in kernel.\n"
+                            "Rewrite using .tolist()/.values/.sum()/.mean() on kernel variables.\n"
+                            "Execute quota NOT consumed.",
+                    tool_call_id=tool_call_id,
+                )
 
             # Block network requests (urllib, requests, wget, curl)
             # Fonts are pre-installed in the Docker image
@@ -423,11 +419,11 @@ def build_agent(
                 # All numbers come from m[key] f-string interpolation in HTML template
 
             # --- Hardcoded metric variable check (SCENARIO-INDEPENDENT) ---
-            # Detects: any_variable = large_number (>1000) without data ops
-            # Works for ANY domain: revenue, salary, temperature, stock_price, etc.
+            # Detects: any_variable = large_number (>=1000) on its own line
+            # Regex only matches plain `var = number`, not `var = df['col'].sum()`
             if _total_blocked >= _MAX_BLOCKED:
                 logger.info("[Tool] Skipping variable assignment check (blocked %d times)", _total_blocked)
-            elif not _has_data_access:
+            else:
                 # Safe variable patterns: UI/formatting constants + config
                 safe_patterns = (
                     # UI/PDF formatting — MUST be fixed constants
