@@ -318,15 +318,27 @@ CUSTOM_CSS = """
     margin: 2px 0;
 }
 
-/* ── Sidebar styling (force dark background) ── */
-[data-testid="stSidebar"] {
+/* ── Sidebar styling (force dark background - aggressive) ── */
+section[data-testid="stSidebar"],
+[data-testid="stSidebar"],
+[data-testid="stSidebar"] > div,
+[data-testid="stSidebar"] > div > div,
+[data-testid="stSidebar"] .block-container,
+[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
     background-color: #1e293b !important;
 }
 
-[data-testid="stSidebar"] > div:first-child {
-    background-color: #1e293b !important;
+/* Force dark background on all sidebar children */
+[data-testid="stSidebar"] * {
+    background-color: transparent !important;
 }
 
+/* Override Streamlit's default light background */
+section[data-testid="stSidebar"] {
+    background: #1e293b !important;
+}
+
+/* Text colors */
 [data-testid="stSidebar"] p,
 [data-testid="stSidebar"] h1,
 [data-testid="stSidebar"] h2,
@@ -338,6 +350,14 @@ CUSTOM_CSS = """
 [data-testid="stSidebar"] div.stMarkdown *,
 [data-testid="stSidebar"] small,
 [data-testid="stSidebar"] div {
+    color: #e2e8f0 !important;
+}
+
+/* File uploader text */
+[data-testid="stSidebar"] [data-testid="stFileUploader"] label,
+[data-testid="stSidebar"] [data-testid="stFileUploader"] span,
+[data-testid="stSidebar"] [data-testid="stFileUploader"] p,
+[data-testid="stSidebar"] [data-testid="stFileUploader"] small {
     color: #e2e8f0 !important;
 }
 
@@ -354,6 +374,16 @@ CUSTOM_CSS = """
 [data-testid="stSidebar"] button {
     width: 100%;
     border-radius: 8px;
+}
+
+/* File uploader box */
+[data-testid="stSidebar"] [data-testid="stFileUploadDropzone"] {
+    background-color: #1e293b !important;
+    border: 2px dashed #475569 !important;
+}
+
+[data-testid="stSidebar"] [data-testid="stFileUploadDropzone"]:hover {
+    border-color: #64748b !important;
 }
 </style>
 """
