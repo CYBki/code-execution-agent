@@ -318,7 +318,15 @@ CUSTOM_CSS = """
     margin: 2px 0;
 }
 
-/* ── Sidebar styling (dark background) ── */
+/* ── Sidebar styling (force dark background) ── */
+[data-testid="stSidebar"] {
+    background-color: #1e293b !important;
+}
+
+[data-testid="stSidebar"] > div:first-child {
+    background-color: #1e293b !important;
+}
+
 [data-testid="stSidebar"] p,
 [data-testid="stSidebar"] h1,
 [data-testid="stSidebar"] h2,
@@ -328,7 +336,8 @@ CUSTOM_CSS = """
 [data-testid="stSidebar"] label,
 [data-testid="stSidebar"] strong,
 [data-testid="stSidebar"] div.stMarkdown *,
-[data-testid="stSidebar"] small {
+[data-testid="stSidebar"] small,
+[data-testid="stSidebar"] div {
     color: #e2e8f0 !important;
 }
 
