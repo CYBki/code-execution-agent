@@ -13,6 +13,7 @@ from langgraph.types import Overwrite
 logger = logging.getLogger(__name__)
 
 from src.agent.graph import get_or_build_agent
+from src.storage.db import save_files, save_message, update_conversation_title
 from src.tools.artifact_store import get_store
 from src.ui.styles import get_tool_icon, get_tool_label
 
@@ -547,6 +548,13 @@ def render_chat():
     st.session_state["messages"].append({"role": "user", "content": user_query})
     logger.info(f"[UI] Saved user message to history. Total messages: {len(st.session_state['messages'])}")
 
+    # Persist to DB
+    _sid = st.session_state.get("session_id", "")
+    if _sid:
+        save_message(_sid, "user", user_query)
+        if len(st.session_state["messages"]) == 1:
+            update_conversation_title(_sid, user_query[:80])
+
     # Get sandbox manager and session ID
     sandbox_manager = st.session_state.get("sandbox_manager")
     session_id = st.session_state.get("session_id", "default")
@@ -583,6 +591,10 @@ def render_chat():
             sandbox_manager.upload_files(uploaded_files)
             st.session_state["_files_uploaded"] = uploaded_fingerprint
             logger.info("Uploaded %d files to sandbox", len(uploaded_files))
+            # Persist files to DB so they survive page refresh
+            _sid = st.session_state.get("session_id", "")
+            if _sid:
+                save_files(_sid, uploaded_files)
         except Exception as e:
             logger.error("Failed to upload files to sandbox: %s", e, exc_info=True)
             st.warning(f"⚠️ Dosya yüklenemedi: {e}")
@@ -683,3 +695,8 @@ def render_chat():
         },
     })
     logger.info(f"[UI] Saved assistant message to history. Total messages: {len(st.session_state['messages'])}, Steps: {len(collected_steps)}")
+
+    # Persist assistant message to DB (artifacts excluded — binary/too large)
+    _sid = st.session_state.get("session_id", "")
+    if _sid:
+        save_message(_sid, "assistant", full_response, steps=collected_steps)

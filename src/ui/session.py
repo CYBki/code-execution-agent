@@ -8,7 +8,23 @@ import uuid
 import streamlit as st
 
 from src.sandbox.manager import SandboxManager
+from src.storage.db import create_conversation, load_files, load_messages, save_message
 from src.tools.artifact_store import release_store
+
+
+class MockUploadedFile:
+    """Mimics Streamlit's UploadedFile interface for DB-restored files."""
+
+    def __init__(self, name: str, size: int, data: bytes):
+        self.name = name
+        self.size = size
+        self._data = data
+
+    def getvalue(self) -> bytes:
+        return self._data
+
+    def read(self) -> bytes:
+        return self._data
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +36,14 @@ def init_session():
     - Registers atexit cleanup for sandbox stop
     - Sets up unique session_id for thread-based sandbox + checkpointer
     """
+    # --- User identification via URL query param (persists across F5) ---
+    if "user_id" not in st.session_state:
+        uid = st.query_params.get("uid", "")
+        if not uid:
+            uid = str(uuid.uuid4())
+            st.query_params["uid"] = uid
+        st.session_state["user_id"] = uid
+
     # Core state
     st.session_state.setdefault("messages", [])
     st.session_state.setdefault("uploaded_files", [])
@@ -31,6 +55,25 @@ def init_session():
 
     # Generate unique session/thread ID for OpenSandbox + checkpointer
     st.session_state.setdefault("session_id", str(uuid.uuid4()))
+
+    # Register conversation in DB (idempotent — INSERT OR IGNORE)
+    if "db_conversation_created" not in st.session_state:
+        st.session_state["db_conversation_created"] = True
+        create_conversation(
+            session_id=st.session_state["session_id"],
+            user_id=st.session_state["user_id"],
+        )
+
+    # Restore uploaded files from DB if session state is empty
+    if not st.session_state.get("uploaded_files"):
+        _sid = st.session_state.get("session_id", "")
+        if _sid:
+            saved = load_files(_sid)
+            if saved:
+                st.session_state["uploaded_files"] = [
+                    MockUploadedFile(f["name"], f["size"], f["data"]) for f in saved
+                ]
+                logger.info("Restored %d file(s) from DB for session %s", len(saved), _sid)
 
     # Default HTML render height (Risk #3 fallback)
     st.session_state.setdefault("html_render_height", 600)
@@ -87,7 +130,13 @@ def reset_session():
     st.session_state["pending_html"] = []
     st.session_state["pending_charts"] = []
     # Generate new session ID for fresh conversation thread
-    st.session_state["session_id"] = str(uuid.uuid4())
+    new_session_id = str(uuid.uuid4())
+    st.session_state["session_id"] = new_session_id
+
+    # Register fresh conversation in DB
+    user_id = st.session_state.get("user_id", "unknown")
+    create_conversation(session_id=new_session_id, user_id=user_id)
+    st.session_state["db_conversation_created"] = True
     # Reset file uploader widget key so it clears
     st.session_state["uploader_key"] = str(uuid.uuid4())
     # Clear agent cache so it rebuilds with new session context

@@ -6,7 +6,8 @@ import html as html_mod
 
 import streamlit as st
 
-from src.ui.session import reset_session
+from src.storage.db import delete_conversation, list_conversations, load_files, load_messages, save_files
+from src.ui.session import MockUploadedFile, reset_session
 
 FILE_TYPE_ICONS = {
     ".csv": "📊",
@@ -56,19 +57,33 @@ def render_sidebar():
         # Sync uploaded files to session state (upload to sandbox happens in chat.py)
         if uploaded:
             st.session_state["uploaded_files"] = uploaded
+            # Save to DB immediately so they survive page refresh
+            _sid = st.session_state.get("session_id", "")
+            if _sid:
+                save_files(_sid, uploaded)
 
-        # Show uploaded file list
+        # Show uploaded file list with download buttons
         files = st.session_state.get("uploaded_files", [])
         if files:
             st.markdown("**Uploaded files:**")
-            for f in files:
+            for i, f in enumerate(files):
                 icon = _get_file_icon(f.name)
                 size = _format_size(f.size)
-                safe_name = html_mod.escape(f.name)
-                st.markdown(
-                    f'<div class="file-badge">{icon} {safe_name} ({size})</div>',
-                    unsafe_allow_html=True,
-                )
+                col1, col2 = st.columns([4, 1])
+                with col1:
+                    safe_name = html_mod.escape(f.name)
+                    st.markdown(
+                        f'<div class="file-badge">{icon} {safe_name} ({size})</div>',
+                        unsafe_allow_html=True,
+                    )
+                with col2:
+                    st.download_button(
+                        label="⬇️",
+                        data=f.getvalue(),
+                        file_name=f.name,
+                        key=f"dl_upload_{i}_{f.name}",
+                        help=f"{f.name} indir",
+                    )
 
         st.divider()
 
@@ -76,6 +91,50 @@ def render_sidebar():
         if st.button("🔄 New Conversation", use_container_width=True):
             reset_session()
             st.rerun()
+
+        # --- Conversation history ---
+        user_id = st.session_state.get("user_id", "")
+        if user_id:
+            conversations = list_conversations(user_id)
+            current_sid = st.session_state.get("session_id", "")
+
+            # Filter out empty/current conversations that have no messages yet
+            past = [c for c in conversations if c["session_id"] != current_sid]
+
+            if past:
+                st.divider()
+                st.markdown("**🕓 Geçmiş Konuşmalar**")
+                for conv in past:
+                    title = conv["title"] or "Yeni Konuşma"
+                    updated = conv["updated_at"][:16].replace("T", " ") if conv["updated_at"] else ""
+                    col1, col2 = st.columns([5, 1])
+                    with col1:
+                        label = f"{title[:30]}…" if len(title) > 30 else title
+                        if st.button(label, key=f"load_{conv['session_id']}", use_container_width=True,
+                                     help=f"{title}\n{updated}"):
+                            # Load selected conversation messages
+                            msgs = load_messages(conv["session_id"])
+                            st.session_state["messages"] = msgs
+                            st.session_state["session_id"] = conv["session_id"]
+                            st.session_state.pop("_agent_cache", None)
+                            st.session_state.pop("_rendered_ids", None)
+                            st.session_state.pop("_files_uploaded", None)
+                            # Restore files for this conversation
+                            saved_files = load_files(conv["session_id"])
+                            if saved_files:
+                                st.session_state["uploaded_files"] = [
+                                    MockUploadedFile(f["name"], f["size"], f["data"])
+                                    for f in saved_files
+                                ]
+                            else:
+                                st.session_state["uploaded_files"] = []
+                            st.toast(f"✅ Konuşma yüklendi: {title[:40]}", icon="📂")
+                            st.rerun()
+                    with col2:
+                        if st.button("🗑️", key=f"del_{conv['session_id']}",
+                                     help="Konuşmayı sil"):
+                            delete_conversation(conv["session_id"])
+                            st.rerun()
 
         # Model info
         st.divider()

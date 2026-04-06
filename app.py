@@ -6,6 +6,7 @@ import os
 import streamlit as st
 from dotenv import load_dotenv
 
+from src.storage.db import init_db
 from src.ui.chat import render_chat
 from src.ui.components import render_sidebar
 from src.ui.session import init_session
@@ -47,6 +48,9 @@ except ValueError as e:
         "```"
     )
     st.stop()
+
+# Initialize SQLite DB (creates tables if not exist)
+init_db()
 
 # Initialize session state (pre-warms sandbox in background)
 init_session()
