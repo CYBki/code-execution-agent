@@ -47,6 +47,8 @@ services:
       - .env
     environment:
       - OPEN_SANDBOX_DOMAIN=127.0.0.1:8080
+    volumes:
+      - ./logs:/app/logs
     depends_on:
       opensandbox-server:
         condition: service_healthy

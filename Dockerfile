@@ -20,6 +20,9 @@ COPY app.py .
 COPY src/ src/
 COPY skills/ skills/
 
+# Logs directory (persistent via volume mount)
+RUN mkdir -p /app/logs
+
 # Streamlit config
 RUN mkdir -p /root/.streamlit
 RUN echo '[server]\nheadless = true\nenableCORS = false\nenableXsrfProtection = false\n\n[browser]\ngatherUsageStats = false' > /root/.streamlit/config.toml

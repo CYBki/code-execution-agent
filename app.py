@@ -15,10 +15,25 @@ from src.utils.config import get_secret
 
 # Configure logging
 log_level = logging.DEBUG if os.getenv("DEBUG") else logging.INFO
-logging.basicConfig(
-    level=log_level,
-    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+LOG_FORMAT = "%(asctime)s [%(name)s] %(levelname)s: %(message)s"
+
+# Console handler (INFO+)
+logging.basicConfig(level=log_level, format=LOG_FORMAT)
+
+# File handler (WARNING+ → persistent, rotating)
+from logging.handlers import RotatingFileHandler
+
+_log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+os.makedirs(_log_dir, exist_ok=True)
+_file_handler = RotatingFileHandler(
+    os.path.join(_log_dir, "app.log"),
+    maxBytes=10 * 1024 * 1024,  # 10 MB
+    backupCount=5,
+    encoding="utf-8",
 )
+_file_handler.setLevel(logging.WARNING)
+_file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
+logging.getLogger().addHandler(_file_handler)
 
 # Load environment variables
 load_dotenv()
