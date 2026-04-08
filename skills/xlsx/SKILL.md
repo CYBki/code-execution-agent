@@ -472,6 +472,50 @@ df = pd.read_excel('/home/sandbox/data.xlsx', parse_dates=['Date', 'Created'])
 df['Price'] = pd.to_numeric(df['Price'], errors='coerce')  # Non-numeric → NaN
 ```
 
+## Date Filtering — NEVER Guess Format
+
+`parse_file` output includes `date_columns` with detected format and samples from the actual Excel data.
+
+**RULE:** Use the EXACT format from `date_columns` — never assume or convert to a different format.
+
+```python
+# parse_file output example:
+# 'date_columns': {'Tarih': {'format': '%m/%d/%Y', 'samples': ['04/29/2025', '04/22/2025']}}
+
+# Step 1: Read with detected format
+fmt = '%m/%d/%Y'  # ← from parse_file date_columns
+df['Tarih'] = pd.to_datetime(df['Tarih'], format=fmt)
+
+# Step 2: User provides date in SAME format as Excel
+user_date = pd.to_datetime(user_input, format=fmt)
+
+# Step 3: Filter
+filtered = df[df['Tarih'] < user_date]
+```
+
+**Step 4: Display and save — strftime for SCREEN ONLY, datetime for EXCEL:**
+```python
+# FOR SCREEN OUTPUT (print) — use strftime to show original format:
+display_df = filtered.copy()
+display_df['Tarih'] = display_df['Tarih'].dt.strftime(fmt)
+print(display_df)  # ALL columns, dates in original Excel format
+
+# FOR EXCEL OUTPUT (to_excel) — keep datetime, NEVER strftime:
+# ❌ WRONG — converts to string, Excel shows '12/01/2026 with apostrophe
+filtered['Tarih'] = filtered['Tarih'].dt.strftime(fmt)
+filtered.to_excel('output.xlsx')
+
+# ✅ CORRECT — dates stay as datetime, Excel formats them properly
+filtered.to_excel('output.xlsx')  # Tarih column stays datetime
+```
+
+**CRITICAL:**
+- If `date_columns` says `%m/%d/%Y` → use `%m/%d/%Y` for reading, filtering AND displaying
+- If `date_columns` says `%d.%m.%Y` → use `%d.%m.%Y` for reading, filtering AND displaying
+- NEVER show dates in pandas default `YYYY-MM-DD HH:MM:SS` format — always use `strftime(fmt)` for output
+- NEVER convert Excel dates to a different format than what `parse_file` detected
+- If user enters date in a different format than Excel, ask user to use the Excel format
+
 ## Common Analysis Patterns
 
 ### Exploratory Data Analysis (EDA)

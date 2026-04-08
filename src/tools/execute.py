@@ -127,6 +127,10 @@ def make_execute_tool(backend: OpenSandboxBackend, session_id: str = ""):
             out_preview = (output or "")[:300].replace("\n", "\\n")
             logger.info("execute output (exit=%s): %s", exit_code, out_preview)
 
+            # Clean datetime display: strip ' 00:00:00' (midnight = date-only, no real time)
+            if output:
+                output = output.replace(' 00:00:00', '')
+
             MAX_OUTPUT = 50_000
             if output and len(output) > MAX_OUTPUT:
                 output = output[:MAX_OUTPUT] + f"\n... [truncated, {len(output)} total chars]"
