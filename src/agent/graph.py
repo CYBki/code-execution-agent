@@ -14,7 +14,7 @@ from langchain.agents import create_agent
 from langchain.agents.middleware import wrap_tool_call
 from langchain_anthropic.middleware import AnthropicPromptCachingMiddleware
 from langchain_core.messages import ToolMessage
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.sqlite import SqliteSaver
 
 from deepagents._models import resolve_model
 from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
@@ -33,6 +33,28 @@ from src.tools.visualization import make_visualization_tool
 logger = logging.getLogger(__name__)
 
 REACT_MAX_ITERATIONS = 30
+
+# --- Persistent checkpointer (SqliteSaver singleton) ---
+_checkpointer: SqliteSaver | None = None
+_checkpointer_conn = None
+
+
+def _get_checkpointer() -> SqliteSaver:
+    """Return a module-level SqliteSaver backed by checkpoints.db.
+
+    Persistent across agent rebuilds and app restarts.
+    """
+    global _checkpointer, _checkpointer_conn
+    if _checkpointer is None:
+        import sqlite3
+        import os
+        db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "checkpoints.db")
+        db_path = os.path.normpath(db_path)
+        _checkpointer_conn = sqlite3.connect(db_path, check_same_thread=False)
+        _checkpointer = SqliteSaver(_checkpointer_conn)
+        _checkpointer.setup()  # Create tables if not exist
+        logger.info("SqliteSaver initialized at %s", db_path)
+    return _checkpointer
 
 _COMPLEX_KEYWORDS = (
     "marka", "brand", "segment", "cluster", "skor", "score",
@@ -533,9 +555,7 @@ def build_agent(
         smart_interceptor,
     ]
 
-    # MemorySaver: in-process only, lost on restart.
-    # For production: replace with SqliteSaver or PostgresSaver.
-    checkpointer = MemorySaver()
+    checkpointer = _get_checkpointer()
 
     agent = create_agent(
         model=model,

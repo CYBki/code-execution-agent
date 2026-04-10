@@ -13,6 +13,7 @@ from langgraph.types import Overwrite
 logger = logging.getLogger(__name__)
 
 from src.agent.graph import get_or_build_agent
+from src.skills.learner import auto_learn
 from src.storage.db import save_files, save_message, update_conversation_title
 from src.tools.artifact_store import get_store
 from src.ui.styles import get_tool_icon, get_tool_label
@@ -700,3 +701,17 @@ def render_chat():
     _sid = st.session_state.get("session_id", "")
     if _sid:
         save_message(_sid, "assistant", full_response, steps=collected_steps)
+
+    # --- Auto Learn: judge output quality + auto-improve skills (background) ---
+    import threading
+    threading.Thread(
+        target=auto_learn,
+        kwargs={
+            "user_query": user_query,
+            "agent_final_response": full_response,
+            "collected_steps": collected_steps,
+            "uploaded_files": uploaded_files,
+        },
+        daemon=True,
+        name="auto_learn",
+    ).start()

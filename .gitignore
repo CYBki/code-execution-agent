@@ -3,6 +3,8 @@ logs/
 
 # Python
 conversations.db
+checkpoints.db*
+eval_log.jsonl
 __pycache__/
 *.py[cod]
 *$py.class

@@ -37,6 +37,11 @@ print(f'df still here: {len(df):,} rows')
 - Validation at the END of analysis execute: `print('✅ Validation OK')`
 - Use try/except inside the script — do NOT use a separate execute
 
+### Output file summary (MANDATORY)
+After creating any output file, read it back and print its columns, shape, and a few sample rows.
+Format is free — the goal is to confirm the output matches the user's request before delivering.
+If the summary shows a mismatch (wrong columns, wrong row count, unexpected values), fix it before delivering.
+
 ## Basic CSV Reading
 
 ```python

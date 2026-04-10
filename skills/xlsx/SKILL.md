@@ -152,6 +152,11 @@ assert os.path.exists(output_path), f'File not created: {output_path}'
 print(f'OK: {output_path} ({os.path.getsize(output_path)/1024:.1f} KB)')
 ```
 
+### Output file summary (MANDATORY)
+After creating any output file, read it back and print its columns, shape, and a few sample rows.
+Format is free — the goal is to confirm the output matches the user's request before delivering.
+If the summary shows a mismatch (wrong columns, wrong row count, unexpected values), fix it before delivering.
+
 ### Metric computation and PDF must be in the same execute
 NEVER hardcode numbers from previous execute output as `m = {'total': 1234, ...}`.
 Every metric MUST be **computed in code** — df is already in memory.
@@ -753,3 +758,27 @@ npv = sum(cf / (1 + discount_rate) ** i for i, cf in enumerate(cash_flows))
 from scipy.optimize import brentq
 irr = brentq(lambda r: sum(cf / (1 + r) ** i for i, cf in enumerate(cash_flows)), -0.5, 10.0)
 ```
+
+
+## Column Addition Rules
+- When user asks for ONE column, add exactly ONE column — no "bonus" extras
+- If currency name is ambiguous (e.g. "kron" could be DKK/SEK/NOK), ASK the user which one before adding
+- Never add multiple currency pairs when only one was requested
+- Always verify the column was added: `print(df.columns.tolist())` after modification
+
+## File Handling Rules
+- Always verify the exact filename the user references — "12gun" ≠ "11gun"
+- If multiple similar files exist, explicitly confirm which file to use before proceeding
+- When user says "buna ekle" (add to this), they mean the file they just mentioned — not a different one
+- One clear action per response — never repeat previous responses in the current answer
+- If you made an error, acknowledge briefly and move forward with the correct action
+
+
+## Currency Addition Verification Rules
+
+- When adding currency exchange rate columns, ALWAYS execute a verification step after the addition
+- After adding any new column, print `df.columns.tolist()` to show the column was actually created
+- For currency conversions, print `df[['original_currency_col', 'new_exchange_rate_col']].head()` to prove values exist
+- When user requests currency data like "japon yeni tl kuru", add the JPY/TRY exchange rate column AND show sample values
+- Never claim a column was added without executing code that proves it exists in the dataframe
+- Always end currency addition tasks by showing the updated dataframe structure and sample data
