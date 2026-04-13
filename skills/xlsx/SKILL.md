@@ -782,3 +782,235 @@ irr = brentq(lambda r: sum(cf / (1 + r) ** i for i, cf in enumerate(cash_flows))
 - When user requests currency data like "japon yeni tl kuru", add the JPY/TRY exchange rate column AND show sample values
 - Never claim a column was added without executing code that proves it exists in the dataframe
 - Always end currency addition tasks by showing the updated dataframe structure and sample data
+
+
+## Code Execution Display Rules
+- Always include `print()` statements to show filtering results: `print(f"After filtering: {len(filtered_df):,} rows")`
+- When adding calculated columns, immediately display the new column: `print(df[['original_col1', 'original_col2', 'new_column']].head())`
+- For datetime calculations, show sample values to verify correctness: `print(df[['timestamp1', 'timestamp2', 'calculated_hours']].head(3))`
+- Never claim completion without showing the actual filtered data and new column values in the output
+- End each filtering/calculation step with a validation print showing row counts and sample data
+
+
+## Data Validation Rules
+- After reading Excel files, ALWAYS verify data diversity: check `df['column'].value_counts()` to ensure values aren't suspiciously uniform
+- When filtering data (e.g., "values > 5"), ALWAYS show the filtered results with `print(filtered_df)` or `print(filtered_df.head(10))` to prove the filter worked
+- Before claiming "all X have value Y", verify with `df['column'].nunique()` and `df['column'].describe()` to check for data loading issues
+- When adding categorical columns based on numeric ranges, validate the new column distribution with `df['new_column'].value_counts()`
+- If all values in a numeric column are identical, investigate potential parsing errors before proceeding with analysis
+
+
+## Data Filtering and Column Addition Validation
+
+- Always show the actual filtered results after applying conditions — use `print(filtered_df.head())` or `print(filtered_df[['key_columns']].head())`
+- After adding new columns, immediately validate with `print(df[['new_column_name']].value_counts())` to show the distribution
+- When filtering data, print the count: `print(f"Found {len(filtered_df):,} rows matching criteria")`
+- For categorical column additions, show sample rows: `print(df[['original_col', 'new_col']].head(10))`
+- Never claim completion without showing execute output — always provide concrete evidence of the work done
+
+
+## Date Filtering Rules
+- When user requests specific YEAR filtering, ALWAYS check if that year EXISTS in the dataset first
+- Before applying date filters, print the actual date range: `print(f"Date range in data: {df['date_col'].min()} to {df['date_col'].max()}")`
+- If requested year is NOT found, inform user immediately: "No data found for [year]. Available years: [list]"
+- Never silently apply filters that return zero results without explaining why
+
+
+## Excel Output Generation Rules
+
+- When user asks for Excel output ("excel çıktısı", "Excel file", "export to Excel"), ALWAYS execute code that creates an actual .xlsx file
+- Use `df.to_excel('/home/sandbox/output.xlsx', index=False)` to create the file
+- After creating Excel file, ALWAYS call `download_file('output.xlsx')` to make it available
+- Verify file creation with `os.path.exists('/home/sandbox/output.xlsx')` before claiming success
+- Never claim Excel file is "ready for download" without actually executing file creation code
+- Include sheet naming when appropriate: `df.to_excel(path, sheet_name='Data', index=False)`
+
+
+## Turkish Language Query Handling
+- When user writes in Turkish, respond in Turkish and clarify what they want before proceeding
+- "tm excel ciktisini da ver" means "also give me the tm excel output" - ask what specific data/analysis they want exported
+- Never claim to create files without actually executing the code and showing the file was created
+- Always use download_file() to deliver Excel files to user, don't just mention creating them
+- After creating Excel output, verify file exists and show first few rows: `print(f"✅ Excel file created: {filename}, {len(df)} rows")`
+
+
+## Multi-Sheet Excel Requirements
+- Always check if file has multiple sheets: `xl = pd.ExcelFile(filepath)` then `print(xl.sheet_names)`
+- When user mentions a specific sheet name (e.g. "Marmara sayfasında"), read THAT sheet: `pd.read_excel(filepath, sheet_name='Marmara')`
+- For "all sheets" operations, iterate through ALL sheets: `for sheet in xl.sheet_names:`
+- Never assume single sheet structure when user mentions sheet names or "all sheets"
+- Before filtering or adding columns, verify the column exists in target sheet(s)
+- When adding columns to multiple sheets, apply the operation to each sheet individually
+
+
+## Vague Query Handling Rules
+
+- When user says "I uploaded a new file" or similar without specific requests, ALWAYS ask what they want to analyze before starting any work
+- Before using parse_file(), confirm the user wants file analysis — don't assume
+- If query lacks analytical intent (just mentions upload), respond: "I see you uploaded a file. What would you like me to analyze or calculate from it?"
+- Never start discovery phase for pure upload notifications without analytical requests
+
+
+## Ambiguous Query Handling
+- When user input is unclear, ambiguous, or just "yes/no" responses, STOP and ask for clarification
+- Never assume what the user wants — ask specific questions about their data analysis needs
+- Before starting any analysis workflow, verify the user has provided a clear, actionable request
+- If query is in another language or seems incomplete, respond: "I need more details about what analysis you'd like me to perform on your data"
+
+
+## Network Error Recovery Rules
+
+- When getting "Network connectivity error: [Errno 111] Connection refused", STOP trying to execute the same code repeatedly
+- Network errors are environment issues, not code issues — DO NOT enter correction loops
+- If execute fails with network error, immediately inform user: "I'm experiencing connectivity issues that prevent code execution. Please try again in a moment."
+- Never waste execute budget on identical retries when the error is clearly environmental
+- Before any execute attempt, use parse_file() first to verify file access without consuming execute budget
+
+
+## Network Error Recovery Rules
+
+- When execute() fails with "Network connectivity error" or "Connection refused", STOP trying execute() immediately
+- Instead, use parse_file() first to understand the file structure — this tool works without network
+- After parse_file() succeeds, try execute() again with simpler code blocks
+- If execute() still fails after parse_file(), inform user that analysis cannot proceed due to system limitations
+- Never retry the same failing execute() command multiple times — each retry wastes limited execution budget
+
+
+## Network Error Recovery Rules
+- When network connectivity errors occur, NEVER retry the same code immediately
+- If pandas.read_excel() fails with network error, the file is already uploaded — use parse_file() tool instead
+- Always start with parse_file() to read uploaded files, not pd.read_excel() directly
+- If execute() fails with "Connection refused", switch to parse_file() for file reading
+- After parse_file() succeeds, use the returned dataframe directly in subsequent execute() calls
+
+
+## Network Error Prevention Rules
+
+- NEVER use `os.path.exists()` or `os.path.getsize()` on the first step — these cause network connectivity errors
+- ALWAYS start with `parse_file(filename)` to check file existence and get schema — this is the ONLY safe way to verify files
+- If parse_file fails, the file doesn't exist — inform user immediately, don't attempt execute() 
+- Before any execute() call, ensure you have successfully run parse_file() first
+- When network errors occur, do NOT retry the same code — switch to parse_file() instead
+
+
+## Network Error Recovery Rules
+- When getting "Connection refused" or network errors, STOP trying to read Excel files directly
+- Network errors mean pandas.read_excel() is blocked — use alternative approach immediately
+- On network error: try `import openpyxl; wb = openpyxl.load_workbook(file_path)` as fallback
+- If openpyxl also fails, inform user that Excel file access is currently blocked
+- Never retry the same failing pandas.read_excel() command multiple times
+- Always check for file existence with `os.path.exists(file_path)` before attempting any Excel operations
+- When file access fails, explain the technical limitation rather than consuming all execute attempts
+
+
+## Query Filtering Rules
+- When filtering produces zero results, ALWAYS inform the user that no rows match the criteria
+- NEVER substitute alternative filters without explicit user permission
+- Before changing filter conditions, ask: "No rows match [original criteria]. Would you like me to adjust the filters?"
+- When user requests specific conditions (e.g., Quantity > 10 AND Category = 'Giyim'), apply exactly those conditions
+- If no results found, show the actual data ranges: "Found Quantity range: X-Y, Categories available: [list]"
+- Only proceed with column additions/calculations AFTER addressing the filtering results
+
+
+## Excel Library Dependencies
+
+- Always import required Excel libraries at the start: `import pandas as pd` and `import openpyxl`
+- If xlrd error occurs, use `engine='openpyxl'` parameter: `pd.read_excel(file, engine='openpyxl')`
+- For Excel output, use `df.to_excel('output.xlsx', index=False, engine='openpyxl')`
+- Never assume xlrd is available — openpyxl handles both .xlsx reading and writing
+- Test the Excel read immediately after import to catch engine issues early
+
+
+## Data Validation Before Processing Rules
+
+- Before filtering data, ALWAYS check if the filter criteria exist: `df['column'].unique()` or `df['column'].value_counts()`
+- If filter values don't exist (e.g., no "Nike" brand, no >20% discount), INFORM user immediately with available options
+- Never silently skip filtering tasks — always attempt the filter and report results even if empty
+- When no records match criteria, show user what values ARE available: "No Nike found. Available brands: [list]"
+- Complete ALL user requests even if intermediate steps yield empty results
+- If filtering returns 0 rows, still proceed with remaining tasks (adding columns, Excel output) on original data
+
+
+## Excel Query Execution Rules
+- When user requests filtering by specific values (e.g., "Store_ID is S001"), attempt the filter immediately — do not ask clarifying questions about format
+- If the exact column name doesn't exist, try common variations (Store_ID, StoreID, store_id) before asking questions
+- When user asks for Excel output, always end with `df.to_excel()` and `download_file()` — never stop at analysis only
+- For date column operations (extracting year, month), use `pd.to_datetime()` first, then `.dt.year` or `.dt.month`
+- Complete the full workflow: filter → add columns → export Excel file — do not pause for clarification on straightforward requests
+
+
+## Column Existence Verification Rules
+
+- Before filtering on ANY column, always verify it exists: `print(df.columns.tolist())` 
+- If a requested filter column is missing, inform user immediately — do NOT skip the filter silently
+- When applying multiple filters, check ALL required columns exist before starting any filtering operations
+- Always apply ALL requested filters in sequence — never skip filters even if one seems redundant
+
+
+## Data Filtering and Output Rules
+- Before filtering by ANY value, check what values actually exist: print(df['column_name'].unique()) or df['column_name'].value_counts()
+- If user requests filtering by a value that doesn't exist, inform user of available options and ask for clarification
+- When user asks for "Excel output" at the end, ALWAYS save the final filtered DataFrame to Excel using df.to_excel()
+- Always validate filters work before proceeding: print(f"Filtered to {len(filtered_df)} rows") after each filter
+- If filtering results in 0 rows, stop and inform user that no records match their criteria
+
+
+## User Requirement Adherence Rules
+- When user specifies multiple filter conditions with "AND" logic, apply ALL conditions even if some return zero results
+- NEVER skip or modify user-specified filter criteria — if Quantity > 20 yields no rows, report this explicitly but still attempt remaining filters
+- If a filter condition produces empty results, inform user about the actual data range: "No rows found with Quantity > 20. Data range: [min-max]"
+- Complete ALL requested tasks in sequence, even when earlier filters reduce the dataset
+- When adding categorical columns, use the EXACT column name requested by user (preserve language/format)
+
+
+## Column Name Precision Rules
+- When user specifies an EXACT column name (e.g. "Şirket kodu"), use that EXACT name — never substitute with similar columns
+- Before filtering, always verify the column exists: `print(df.columns.tolist())` and `print(df['exact_column_name'].unique()[:10])`
+- If the exact column doesn't exist, inform user and ask which available column to use instead
+- Never assume "Şirket tanım" equals "Şirket kodu" — these are different fields with different values
+
+
+## Network Error Recovery Rules
+
+- When encountering "peer closed connection" or "Connection refused" errors, NEVER retry the same code
+- If Excel file creation fails with network errors, switch to CSV output immediately: `df.to_csv(filename, index=False)`
+- For multiple sheets requirement after network failure, create separate CSV files: `df_2009.to_csv('year_2009.csv')` and `df_2010.to_csv('year_2010.csv')`
+- Always test file operations with simple `print("Test")` first if previous network errors occurred
+- When Excel output specifically requested but fails, inform user that CSV alternative is provided due to system limitations
+
+
+## Excel Sheet Modification Verification Rules
+
+- After filtering rows from a sheet, ALWAYS print the before/after row counts: `print(f"Sheet '{sheet_name}': {old_count} → {new_count} rows after filtering")`
+- After adding columns to a sheet, ALWAYS verify the column was added: `print(f"Added column to '{sheet_name}': {list(df.columns)}")`
+- When modifying Excel files, ALWAYS save the result and confirm file creation: `df.to_excel('output.xlsx'); print("✅ Excel file saved successfully")`
+- For multi-sheet operations, process each sheet separately and report completion status for each one
+- Before claiming task completion, validate that ALL requested modifications were actually performed by printing evidence
+
+
+## Multi-Sheet Excel Analysis Rules
+
+- When user mentions specific sheet names, ALWAYS verify those sheets exist using `xl.sheet_names` before proceeding
+- If user asks to filter by column values that seem redundant (e.g., MARKA="NAOS" in sheet named "NAOS"), confirm the logic with user before executing
+- For conditional column additions, use `np.where()` or `pd.cut()` for clean categorization logic
+- When adding status columns, always validate the new column was created: `print(df['new_column'].value_counts())`
+- Before filtering data, check if the filter column exists: `if 'MARKA' in df.columns:` then proceed
+- If requested filter returns empty results, inform user and show available values: `df['column'].unique()`
+
+
+## DuckDB Timeout Prevention Rules
+
+- When Excel files are large (>100MB or >500k rows), NEVER use DuckDB for full sheet reads — it causes 180s timeouts
+- For multi-sheet operations: read ONE sheet at a time with pandas `pd.read_excel(file, sheet_name='specific_sheet')`
+- Apply filters IMMEDIATELY after reading each sheet to reduce memory usage: `df = df[df['Country'] == 'United Kingdom']`
+- Add calculated columns BEFORE any complex operations: `df['Total_Revenue'] = df['Quantity'] * df['Price']`
+- If pandas read also times out, use `chunksize` parameter or process sheets separately
+- Never attempt to read multiple large sheets simultaneously in one execute block
+
+
+## Large File Performance Rules
+- Before processing Excel sheets with >100k rows, use DuckDB directly on CSV files — never load entire datasets into pandas DataFrames
+- For multi-sheet Excel operations on large files: process each sheet separately using DuckDB, write results to temporary CSV files, then combine into final Excel using pandas in chunks
+- Always check row count first: if any sheet >50k rows, switch to streaming/chunked approach immediately
+- When creating Excel output from large data: use `chunksize=10000` parameter in pandas operations to avoid memory/timeout issues
+- Never attempt full DataFrame operations (groupby, merge, calculations) on datasets >100k rows without chunking strategy

@@ -9,6 +9,7 @@ Key differences from Daytona:
 """
 
 import base64
+import concurrent.futures
 import logging
 import re
 import threading
@@ -71,6 +72,27 @@ class OpenSandboxBackend:
         self._interpreter = interpreter
         self._py_context = py_context  # Persistent Python execution context
 
+    def _reset_context(self):
+        """Destroy the current (hung) Python context and create a fresh one.
+
+        Called after a timeout — the old context is stuck in "session is busy"
+        state because codes.run() is still blocking in a background thread.
+        A new context gives subsequent execute() calls a clean kernel.
+        """
+        try:
+            old_id = getattr(self._py_context, "id", None)
+            if old_id:
+                try:
+                    self._interpreter.codes.delete_context(old_id)
+                except Exception:
+                    pass  # May fail if context is stuck — that's OK
+            self._py_context = self._interpreter.codes.create_context(
+                SupportedLanguage.PYTHON
+            )
+            logger.info("Kernel context reset after timeout (new: %s)", self._py_context.id)
+        except Exception as e:
+            logger.error("Failed to reset kernel context: %s", e)
+
     def execute(self, command: str, timeout: int = 180) -> _ExecuteResult:
         """Execute a command in the sandbox.
 
@@ -84,9 +106,36 @@ class OpenSandboxBackend:
                 # Python code path: decode base64 → run in persistent kernel context
                 b64 = m.group(1).strip()
                 py_code = base64.b64decode(b64).decode()
-                result = self._interpreter.codes.run(
-                    py_code, context=self._py_context
+
+                # Wrap codes.run() with timeout — codes.run() has no built-in
+                # timeout and can hang forever on large file operations.
+                # NOTE: Do NOT use 'with' block — pool.__exit__ calls
+                # shutdown(wait=True) which blocks until the hung thread finishes.
+                pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                future = pool.submit(
+                    self._interpreter.codes.run,
+                    py_code, context=self._py_context,
                 )
+                try:
+                    result = future.result(timeout=timeout)
+                except concurrent.futures.TimeoutError:
+                    future.cancel()
+                    pool.shutdown(wait=False)
+                    logger.error("codes.run() timed out after %ds", timeout)
+                    # Reset kernel context — the old context is stuck with the
+                    # hung execution ("session is busy"). Create a fresh one so
+                    # subsequent execute() calls work normally.
+                    self._reset_context()
+                    return _ExecuteResult(
+                        output=f"Error: Code execution timed out after {timeout}s. "
+                               "The operation is too slow — try chunked/streaming reads "
+                               "or use DuckDB to query the file directly without loading "
+                               "it entirely into memory.",
+                        exit_code=1,
+                    )
+                else:
+                    pool.shutdown(wait=False)
+
                 output = result.text or ""
                 if result.error:
                     err_msg = getattr(result.error, "value", str(result.error))
