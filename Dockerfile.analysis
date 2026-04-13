@@ -18,7 +18,8 @@ RUN /opt/python/versions/cpython-3.11.14-linux-x86_64-gnu/bin/python3 -m pip ins
     duckdb==1.1.3 \
     fpdf2==2.8.1 \
     pillow==11.1.0 \
-    python-pptx==1.0.2
+    python-pptx==1.0.2 \
+    xlrd==2.0.1
 
 # Pre-install DejaVu fonts for PDF generation (fpdf2 + weasyprint)
 RUN apt-get update && apt-get install -y --no-install-recommends fonts-dejavu-core && rm -rf /var/lib/apt/lists/* \
