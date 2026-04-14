@@ -13,6 +13,7 @@ from langgraph.types import Overwrite
 logger = logging.getLogger(__name__)
 
 from src.agent.graph import get_or_build_agent
+from src.utils.logging_config import SessionContext
 from src.skills.learner import auto_learn
 from src.storage.db import save_files, save_message, update_conversation_title
 from src.tools.artifact_store import get_store
@@ -560,6 +561,9 @@ def render_chat():
     sandbox_manager = st.session_state.get("sandbox_manager")
     session_id = st.session_state.get("session_id", "default")
     uploaded_files = st.session_state.get("uploaded_files", [])
+
+    # Set session context for log correlation
+    SessionContext.set(session_id)
 
     if not sandbox_manager:
         st.error("Sandbox manager not initialized. Please refresh the page.")

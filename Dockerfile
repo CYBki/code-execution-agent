@@ -15,17 +15,26 @@ RUN pip install --no-cache-dir -r requirements.txt \
     && pip install --no-cache-dir /tmp/wheels/*.whl \
     && rm -rf /tmp/wheels
 
+# Create non-root user
+RUN groupadd -r appuser && useradd -r -g appuser -d /app -s /sbin/nologin appuser
+
 # Copy application code
 COPY app.py .
 COPY src/ src/
 COPY skills/ skills/
 
-# Logs directory (persistent via volume mount)
-RUN mkdir -p /app/logs
+# Persistent directories (via volume mount)
+RUN mkdir -p /app/logs /app/data
 
-# Streamlit config
-RUN mkdir -p /root/.streamlit
-RUN echo '[server]\nheadless = true\nenableCORS = false\nenableXsrfProtection = false\n\n[browser]\ngatherUsageStats = false' > /root/.streamlit/config.toml
+# Streamlit config (under appuser home)
+RUN mkdir -p /app/.streamlit
+COPY .streamlit/config.toml /app/.streamlit/config.toml
+
+# Set ownership
+RUN chown -R appuser:appuser /app
+
+USER appuser
+ENV HOME=/app
 
 EXPOSE 8501
 

@@ -29,31 +29,47 @@ from src.tools.execute import make_execute_tool
 from src.tools.file_parser import make_parse_file_tool
 from src.tools.generate_html import make_generate_html_tool
 from src.tools.visualization import make_visualization_tool
+from src.utils.logging_config import get_audit_logger
 
 logger = logging.getLogger(__name__)
+_audit = get_audit_logger()
 
 REACT_MAX_ITERATIONS = 30
 
-# --- Persistent checkpointer (SqliteSaver singleton) ---
-_checkpointer: SqliteSaver | None = None
+# --- Persistent checkpointer (SqliteSaver or PostgresSaver singleton) ---
+_checkpointer = None
 _checkpointer_conn = None
 
 
-def _get_checkpointer() -> SqliteSaver:
-    """Return a module-level SqliteSaver backed by checkpoints.db.
+def _get_checkpointer():
+    """Return a module-level checkpointer (PostgresSaver or SqliteSaver).
+
+    Backend selection:
+    - DATABASE_URL env var set → PostgresSaver (production)
+    - DATABASE_URL not set     → SqliteSaver with data/checkpoints.db (dev)
 
     Persistent across agent rebuilds and app restarts.
     """
     global _checkpointer, _checkpointer_conn
     if _checkpointer is None:
-        import sqlite3
         import os
-        db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "checkpoints.db")
-        db_path = os.path.normpath(db_path)
-        _checkpointer_conn = sqlite3.connect(db_path, check_same_thread=False)
-        _checkpointer = SqliteSaver(_checkpointer_conn)
-        _checkpointer.setup()  # Create tables if not exist
-        logger.info("SqliteSaver initialized at %s", db_path)
+        database_url = os.environ.get("DATABASE_URL", "")
+
+        if database_url.startswith("postgresql"):
+            from langgraph.checkpoint.postgres import PostgresSaver
+            _checkpointer = PostgresSaver.from_conn_string(database_url)
+            _checkpointer.setup()
+            logger.info("PostgresSaver initialized (PostgreSQL)")
+        else:
+            import sqlite3
+            _project_root = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+            _data_dir = os.environ.get("DATA_DIR", os.path.join(_project_root, "data"))
+            os.makedirs(_data_dir, exist_ok=True)
+            db_path = os.path.join(_data_dir, "checkpoints.db")
+            _checkpointer_conn = sqlite3.connect(db_path, check_same_thread=False)
+            _checkpointer = SqliteSaver(_checkpointer_conn)
+            _checkpointer.setup()
+            logger.info("SqliteSaver initialized at %s", db_path)
     return _checkpointer
 
 _COMPLEX_KEYWORDS = (
@@ -178,7 +194,8 @@ def build_agent(
             filename_normalized = filename.replace("/home/sandbox/", "").strip("/")
 
             if filename_normalized in _seen_parse_files:
-                logger.info("[Tool] BLOCKED duplicate parse_file(%s)", filename)
+                logger.warning("[Tool] BLOCKED duplicate parse_file(%s)", filename)
+                _audit.info("tool_blocked", extra={"tool_name": name, "action": "duplicate_parse", "blocked": True})
                 _total_blocked += 1
                 _consecutive_blocks += 1
                 return ToolMessage(
@@ -199,7 +216,8 @@ def build_agent(
         if name == "execute":
             _execute_count += 1
             if _execute_count > _max_execute:
-                logger.info("[Tool] BLOCKED execute #%d (limit=%d)", _execute_count, _max_execute)
+                logger.warning("[Tool] BLOCKED execute #%d (limit=%d)", _execute_count, _max_execute)
+                _audit.info("tool_blocked", extra={"tool_name": name, "action": "rate_limit", "blocked": True, "execute_num": _execute_count})
                 return ToolMessage(
                     content=f"⛔ Execute limit reached ({_max_execute}).\n"
                             "YOU MUST:\n"
@@ -217,7 +235,8 @@ def build_agent(
             pip_patterns = ["pip install", "pip3 install", "subprocess.run", "subprocess.call",
                            "subprocess.check_call", "subprocess.Popen", "sys.executable, '-m', 'pip'"]
             if any(p in cmd for p in pip_patterns):
-                logger.info("[Tool] BLOCKED pip/subprocess in execute")
+                logger.warning("[Tool] BLOCKED pip/subprocess in execute")
+                _audit.info("tool_blocked", extra={"tool_name": name, "action": "pip_install", "blocked": True})
                 _execute_count -= 1  # Don't count blocked calls
                 return ToolMessage(
                     content="⛔ pip install BLOCKED. All packages are PRE-INSTALLED in sandbox:\n"
@@ -269,6 +288,7 @@ def build_agent(
                 examples_str = "\n  ".join(examples)
                 logger.warning("[Tool] BLOCKED: %d hardcoded assignments: %s",
                                len(_all_hardcoded), examples)
+                _audit.info("tool_blocked", extra={"tool_name": name, "action": "hardcoded_data", "blocked": True})
                 _execute_count -= 1  # Don't count
                 return ToolMessage(
                     content=f"⚠️ HARDCODED DATA DETECTED ({len(_all_hardcoded)} assignments)\n\n"
@@ -292,7 +312,8 @@ def build_agent(
             net_patterns = ["urllib.request", "requests.get", "urlretrieve", "urlopen",
                             "wget", "curl ", "http://", "https://"]
             if any(p in cmd for p in net_patterns) and "cdn.jsdelivr" not in cmd:
-                logger.info("[Tool] BLOCKED network request in execute")
+                logger.warning("[Tool] BLOCKED network request in execute")
+                _audit.info("tool_blocked", extra={"tool_name": name, "action": "network_request", "blocked": True})
                 _execute_count -= 1
                 return ToolMessage(
                     content="⛔ Network requests BLOCKED from sandbox. "
@@ -312,7 +333,8 @@ def build_agent(
             )
             if is_shell:
                 detected = bare_cmd if bare_cmd in shell_cmds else "shell command"
-                logger.info("[Tool] BLOCKED shell cmd '%s' in execute", detected)
+                logger.warning("[Tool] BLOCKED shell cmd '%s' in execute", detected)
+                _audit.info("tool_blocked", extra={"tool_name": name, "action": "shell_cmd", "blocked": True})
                 _execute_count -= 1
                 _consecutive_blocks += 1
                 file_list = ", ".join(f"/home/sandbox/{fn}" for fn in _seen_parse_files) if _seen_parse_files else "(parse_file not called yet)"
@@ -330,7 +352,8 @@ def build_agent(
             # NOTE: os.path.exists and os.path.getsize are ALLOWED (output verification)
             fs_patterns = ["os.listdir", "os.scandir", "glob.glob", "pathlib.Path"]
             if any(p in cmd for p in fs_patterns):
-                logger.info("[Tool] BLOCKED Python filesystem cmd in execute")
+                logger.warning("[Tool] BLOCKED Python filesystem cmd in execute")
+                _audit.info("tool_blocked", extra={"tool_name": name, "action": "filesystem_exploration", "blocked": True})
                 _execute_count -= 1
                 _consecutive_blocks += 1
                 file_list = ", ".join(f"/home/sandbox/{fn}" for fn in _seen_parse_files) if _seen_parse_files else "(parse_file not called yet)"
@@ -350,7 +373,8 @@ def build_agent(
             if nrows_match and "fpdf" not in cmd.lower():
                 nrows_val = int(nrows_match.group(1))
                 if nrows_val > 10:
-                    logger.info("[Tool] BLOCKED nrows=%d sampling in execute #%d", nrows_val, _execute_count)
+                    logger.warning("[Tool] BLOCKED nrows=%d sampling in execute #%d", nrows_val, _execute_count)
+                    _audit.info("tool_blocked", extra={"tool_name": name, "action": "nrows_sampling", "blocked": True})
                     _execute_count -= 1
                     return ToolMessage(
                         content=f"⛔ nrows={nrows_val} BLOCKED — read ALL data for analysis. "
@@ -373,7 +397,8 @@ def build_agent(
                     continue
                 n = int(vals[0])
                 if n > sampling_limit:
-                    logger.info("[Tool] BLOCKED large sampling (%d) in execute #%d", n, _execute_count)
+                    logger.warning("[Tool] BLOCKED large sampling (%d) in execute #%d", n, _execute_count)
+                    _audit.info("tool_blocked", extra={"tool_name": name, "action": "large_sampling", "blocked": True})
                     _execute_count -= 1
                     return ToolMessage(
                         content=f"⛔ .head({n}) / [:{n}] BLOCKED — remove this sampling limit from code. "
@@ -543,6 +568,7 @@ def build_agent(
             )
 
         logger.info("[Tool] %s done", name)
+        _audit.info("tool_completed", extra={"tool_name": name, "action": "completed", "blocked": False, "execute_num": _execute_count if name == "execute" else None})
         return result
 
     # --- Middleware: only what we need ---

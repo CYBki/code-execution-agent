@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import threading
 from dataclasses import dataclass
@@ -22,7 +23,9 @@ from langchain_core.messages import HumanMessage, SystemMessage
 logger = logging.getLogger(__name__)
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_EVAL_LOG_PATH = _PROJECT_ROOT / "eval_log.jsonl"
+_DATA_DIR = Path(os.environ.get("DATA_DIR", str(_PROJECT_ROOT / "data")))
+_DATA_DIR.mkdir(parents=True, exist_ok=True)
+_EVAL_LOG_PATH = _DATA_DIR / "eval_log.jsonl"
 
 # --- Constants ---
 _MAX_ERRORS_PER_SUGGESTION = 5       # max errors sent to suggestion LLM
