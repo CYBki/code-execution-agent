@@ -305,7 +305,12 @@ def save_files(session_id: str, files: list):
         for f in files:
             try:
                 data = f.getvalue() if hasattr(f, "getvalue") else f.read()
-                file_path = os.path.join(session_dir, f.name)
+                # Sanitize filename to prevent path traversal (e.g. "../../etc/passwd")
+                safe_name = os.path.basename(f.name)
+                if not safe_name:
+                    logger.warning("Rejected empty filename after sanitization")
+                    continue
+                file_path = os.path.join(session_dir, safe_name)
                 with open(file_path, "wb") as fp:
                     fp.write(data)
                 cur.execute(

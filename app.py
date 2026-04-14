@@ -42,7 +42,7 @@ except ValueError as e:
         "API anahtarlarını `.env` dosyasına veya Streamlit secrets'a ekleyin.\n\n"
         "```\n"
         "ANTHROPIC_API_KEY=sk-ant-...\n"
-        "OPEN_SANDBOX_API_KEY=local-sandbox-key-2024\n"
+        "OPEN_SANDBOX_API_KEY=<your-sandbox-api-key>\n"
         "```"
     )
     st.stop()

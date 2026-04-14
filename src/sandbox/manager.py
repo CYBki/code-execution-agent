@@ -11,6 +11,7 @@ Key differences from Daytona:
 import base64
 import concurrent.futures
 import logging
+import os
 import re
 import threading
 from datetime import timedelta
@@ -280,7 +281,12 @@ class SandboxManager:
             return
         logger.info("Uploading %d file(s) to sandbox", len(files))
         for f in files:
-            dst = f"{SANDBOX_HOME}/{f.name}"
+            # Sanitize filename to prevent path traversal (e.g. "../../etc/passwd")
+            safe_name = os.path.basename(f.name)
+            if not safe_name:
+                logger.warning("Rejected empty filename after sanitization")
+                continue
+            dst = f"{SANDBOX_HOME}/{safe_name}"
             data = f.getvalue()
             size_mb = len(data) / (1024 * 1024)
             try:

@@ -2,7 +2,9 @@
 host = "127.0.0.1"
 port = 8080
 log_level = "INFO"
-api_key = "local-sandbox-key-2024"
+# SECURITY: Change this key in production — do not use the default value.
+# Set via OPEN_SANDBOX_API_KEY environment variable in .env
+api_key = "CHANGE-ME-IN-PRODUCTION"
 max_sandbox_timeout_seconds = 86400
 
 [runtime]
