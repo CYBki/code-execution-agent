@@ -2654,6 +2654,575 @@ kullanılmazsa OpenSandbox API otomatik olarak container'ı siler.
 
 ---
 
+## Bölüm 14: Sohbet Hafızası (Conversation Memory) — Agent Nasıl Hatırlıyor?
+
+Bu bölüm projenin en çok merak edilen ama en az görünen katmanı: **Agent önceki soruları
+nasıl hatırlıyor? Yeni dosya ekleyince ne oluyor? Eski konuşmaya dönünce ne değişiyor?**
+
+Sistem **üç bağımsız hafıza katmanı** kullanıyor ve her birinin kapsamı, ömrü ve sınırları farklı:
+
+```
+┌────────────────────────────────────────────────────────────────────────────┐
+│  HAFIZA KATMANI        │ NE HATIRLAR?           │ NE ZAMAN SİLİNİR?       │
+├────────────────────────────────────────────────────────────────────────────┤
+│  1. LangGraph           │ Tüm mesaj geçmişi      │ "Yeni Konuşma" →        │
+│     Checkpointer        │ (user + AI + tool       │  yeni thread_id →       │
+│                         │  mesajları)              │  eski geçmiş erişilmez  │
+│                         │                         │                         │
+│  2. Sandbox Kernel      │ Python değişkenleri     │ "Yeni Konuşma" →        │
+│     (Kalıcı Kernel)     │ (df, m, imports)        │  clean_workspace()      │
+│                         │                         │                         │
+│  3. Veritabanı          │ Mesajlar + dosyalar     │ Kullanıcı silene kadar  │
+│     (SQLite/PostgreSQL) │ (kalıcı depolama)       │  SONSUZA KADAR kalır    │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 14.1 Katman 1: LangGraph Checkpointer — Ajanın "Kısa Süreli Hafızası"
+
+🔗 [graph.py:44-73](https://github.com/CYBki/code-execution-agent/blob/main/src/agent/graph.py#L44-L73)
+
+```python
+_checkpointer = None
+
+def _get_checkpointer():
+    global _checkpointer
+    if _checkpointer is None:
+        database_url = os.environ.get("DATABASE_URL", "")
+        if database_url.startswith("postgresql"):
+            _checkpointer = PostgresSaver.from_conn_string(database_url)
+        else:
+            db_path = os.path.join(_data_dir, "checkpoints.db")
+            _checkpointer_conn = sqlite3.connect(db_path, check_same_thread=False)
+            _checkpointer = SqliteSaver(_checkpointer_conn)
+        _checkpointer.setup()
+    return _checkpointer
+```
+
+**Bu ne yapar?** LangGraph'ın `checkpointer`'ı, bir konuşma thread'indeki **tüm mesajları**
+(HumanMessage, AIMessage, ToolMessage) kalıcı bir depoda saklar.
+
+**Nasıl çalışır — adım adım:**
+
+```
+Kullanıcı: "Bu veriyi analiz et"
+  ↓
+agent.stream(
+    {"messages": [{"role": "user", "content": "Bu veriyi analiz et"}]},
+    config={"configurable": {"thread_id": session_id}},  ← BU KRİTİK!
+)
+  ↓
+1. Checkpointer, bu thread_id için DAHA ÖNCE kaydedilmiş tüm mesajları yükler
+2. Claude şunları görür:
+   [system_prompt] + [önceki tüm mesajlar] + [yeni kullanıcı mesajı]
+3. Claude yanıt verir
+4. Yanıt (AIMessage + ToolMessage'lar) checkpointer'a kaydedilir
+```
+
+🔗 [chat.py:624-627](https://github.com/CYBki/code-execution-agent/blob/main/src/ui/chat.py#L624-L627)
+
+```python
+for chunk in agent.stream(
+    {"messages": [{"role": "user", "content": user_query}]},
+    config={"configurable": {"thread_id": session_id}},  # ← thread_id = session_id
+    stream_mode="updates",
+):
+```
+
+**💡 Neden `thread_id` bu kadar önemli?**
+
+`thread_id` = konuşmanın kimlik numarası. Aynı `thread_id` ile yapılan her `agent.stream()`
+çağrısı, o konuşmanın **tüm geçmişini** Claude'a gösterir.
+
+```
+thread_id = "abc-123"
+
+Turn 1: User: "Veriyi yükle"        → Checkpointer'a kaydedildi
+        AI: parse_file → execute    → Checkpointer'a kaydedildi
+        
+Turn 2: User: "Müşteri analizi yap" → Checkpointer "abc-123" için TÜM Turn 1'i yükler
+        Claude GÖRÜR: [Turn 1 user + AI + tool mesajları] + [Turn 2 user mesajı]
+        Claude HATIRLAR: "Önceki turda df yükledim, hâlâ bellekte"
+```
+
+**Checkpointer olmasaydı ne olurdu?**
+Claude her turda sadece yeni mesajı görürdü — önceki analizi, hangi dosyayı yüklediğini,
+hangi değişkenleri tanımladığını hatırlamazdı. Her seferinde "parse_file → read_excel"
+döngüsüne girerdi.
+
+---
+
+#### 14.1.1 Summarization Middleware — Uzun Konuşmaları Kırpmak
+
+🔗 [graph.py:578](https://github.com/CYBki/code-execution-agent/blob/main/src/agent/graph.py#L578)
+
+```python
+middleware = [
+    create_summarization_middleware(model, backend),  # ← İLK middleware
+    AnthropicPromptCachingMiddleware(...),
+    PatchToolCallsMiddleware(),
+    smart_interceptor,
+]
+```
+
+**Problem:** 10 turlu bir konuşmada, her turda ~5 tool mesajı varsa = 50+ mesaj.
+Her mesajın içinde kod çıktısı var (bazen 50K karakter). Toplamda yüz binlerce token olabilir
+— Claude'un 200K context window'unu aşar.
+
+**Çözüm:** `create_summarization_middleware` eski mesajları **özetler**:
+- Konuşma uzadıkça, eski turların detaylı tool çıktıları kaldırılır
+- Yerine kısa bir özet konur: "Turn 1'de df yüklendi, 48500 satır, 8 sütun"
+- Claude hâlâ "ne olduğunu" bilir ama detaylı çıktıları görmez
+
+**Bu neden ilk middleware?**
+Summarization, Claude'a gönderilecek mesaj listesini **daraltır**. Diğer middleware'ler
+(prompt caching, smart interceptor) daraltılmış listeyle çalışır → daha az token → daha
+az maliyet.
+
+**💡 Neden sadece eski mesajları özetliyoruz?**
+Son 2-3 turundaki mesajlar tam bırakılır — çünkü Claude'un en son ne yaptığını detaylı
+bilmesi gerekir (hata düzeltme, devam etme). Eski turlar özetlenir — "ne olduğunu bilmesi
+yeter, detaylı kodu görmesine gerek yok."
+
+---
+
+### 14.2 Katman 2: Sandbox Kernel — Ajanın "Veri Hafızası"
+
+Bu katman önceki bölümlerde detaylı anlatıldı (Bölüm 4), ama sohbet hafızası bağlamında
+tekrar bakalım:
+
+```python
+# Turn 1 — execute #1:
+df = pd.read_excel('/home/sandbox/sales.xlsx')
+m = {'total': df['Revenue'].sum()}
+
+# Turn 2 — kullanıcı yeni soru soruyor:
+# df VE m HÂLÂ kernel'da! Tekrar yüklemeye gerek yok.
+monthly = df.groupby(df['Date'].dt.month)['Revenue'].sum()
+```
+
+**Kernel hafızası vs Checkpointer hafızası:**
+
+| Özellik | Checkpointer | Kernel |
+|---------|-------------|--------|
+| Ne saklar? | Mesaj metinleri (user/AI/tool) | Python değişkenleri (df, m, imports) |
+| Nerede? | SQLite/PostgreSQL dosyası | Sandbox container RAM |
+| Claude görür mü? | EVET — tüm mesaj geçmişi | HAYIR — sadece çalıştırdığı koddan bilir |
+| Sayfa yenilenince? | ✅ Kalır (disk'te) | ✅ Kalır (container hâlâ çalışıyor) |
+| "Yeni Konuşma"da? | ❌ Yeni thread_id → eski geçmiş erişilmez | ❌ clean_workspace() → kernel sıfırlanır |
+| Eski konuşma yüklenince? | ✅ Eski thread_id → geçmiş geri gelir | ❌ Kernel sıfırlanmış — df yok |
+
+**Kritik senaryo — eski konuşma yükleme:**
+
+```
+1. Kullanıcı konuşma A'da analiz yaptı (df bellekte, checkpointer'da 5 mesaj)
+2. "Yeni Konuşma" → konuşma B başladı (kernel temizlendi, yeni thread_id)
+3. Kullanıcı kenar çubuğundan konuşma A'yı tekrar yükledi:
+   - session_id → konuşma A'nın ID'si (checkpointer eski mesajları gösterir ✅)
+   - AMA kernel sıfırlanmış → df YOK! ❌
+   - Claude eski mesajlardan "df yükledim" diyor → "df hâlâ bellekte" sanıyor
+   - İlk execute'da "NameError: df is not defined" alır
+   - Claude hatayı görür → "Ah, df yok, tekrar yüklemem lazım" → re-read
+```
+
+**💡 Bu neden önemli?** Kernel hafızası **geçici** (session-scoped), checkpointer hafızası
+**kalıcı** (disk'te). İkisi arasındaki bu asimetri, eski konuşma yüklemelerinde bazen
+ilk execute'un başarısız olmasına neden olur — ama ajanın hata düzeltme mekanizması
+(correction loop, max 3 deneme) bunu otomatik halleder.
+
+---
+
+### 14.3 Katman 3: Veritabanı — Kalıcı Sohbet Arşivi
+
+🔗 [db.py:199-222](https://github.com/CYBki/code-execution-agent/blob/main/src/storage/db.py#L199-L222)
+
+```python
+def save_message(session_id, role, content, steps=None):
+    steps_json = json.dumps(steps, default=str, ensure_ascii=False) if steps else None
+    cur.execute(
+        "INSERT INTO messages (session_id, role, content, steps) VALUES (?, ?, ?, ?)",
+        (session_id, role, content or "", steps_json),
+    )
+    # updated_at da güncellenir → kenar çubuğunda sıralama
+```
+
+**Her mesaj iki yere kaydedilir:**
+
+```
+Kullanıcı mesajı:
+  1. st.session_state["messages"].append({...})     ← UI render için (RAM)
+  2. save_message(session_id, "user", query)         ← DB'ye kalıcı kayıt (disk)
+
+Ajan yanıtı:
+  1. st.session_state["messages"].append({           ← UI render için (RAM)
+       "role": "assistant",
+       "content": full_response,
+       "steps": collected_steps,          ← tool çağrıları + çıktıları
+       "artifacts": {html, charts, downloads},  ← binary veriler (sadece RAM'de)
+   })
+  2. save_message(session_id, "assistant",           ← DB'ye kalıcı kayıt (disk)
+       full_response, steps=collected_steps)
+     # NOT: artifacts DB'ye KAYDEDILMEZ (binary, çok büyük)
+```
+
+🔗 [chat.py:549-558](https://github.com/CYBki/code-execution-agent/blob/main/src/ui/chat.py#L549-L558)
+
+```python
+# Kullanıcı mesajı kaydı
+st.session_state["messages"].append({"role": "user", "content": user_query})
+save_message(_sid, "user", user_query)
+if len(st.session_state["messages"]) == 1:
+    update_conversation_title(_sid, user_query[:80])  # ← İlk mesaj = konuşma başlığı
+```
+
+**💡 Neden başlık ilk mesajdan alınıyor?**
+Kenar çubuğundaki "Geçmiş Konuşmalar" listesinde kullanıcı konuşmaları ayırt edebilsin diye.
+İlk mesaj genellikle niyeti en iyi özetler: "Bu veriyi analiz et" veya "Müşteri segmentasyonu yap".
+
+---
+
+### 14.4 Kullanıcı Yeni Dosya Eklediğinde Ne Olur?
+
+Bu en karmaşık senaryo. Adım adım:
+
+🔗 [chat.py:593-606](https://github.com/CYBki/code-execution-agent/blob/main/src/ui/chat.py#L593-L606)
+
+```python
+# 1. Dosya parmak izi kontrolü
+uploaded_fingerprint = tuple(f.name for f in uploaded_files) if uploaded_files else ()
+if uploaded_files and uploaded_fingerprint != st.session_state.get("_files_uploaded"):
+    # Parmak izi değişti → yeni dosya var!
+    sandbox_manager.upload_files(uploaded_files)              # 2. Sandbox'a yükle
+    st.session_state["_files_uploaded"] = uploaded_fingerprint # 3. Parmak izini güncelle
+    save_files(_sid, uploaded_files)                          # 4. DB'ye kaydet
+```
+
+🔗 [graph.py:600-629](https://github.com/CYBki/code-execution-agent/blob/main/src/agent/graph.py#L600-L629)
+
+```python
+def get_or_build_agent(sandbox_manager, thread_id, uploaded_files, user_query=""):
+    file_fingerprint = tuple(
+        (f.name, len(f.getvalue())) for f in (uploaded_files or [])
+    )
+    cached = st.session_state.get("_agent_cache")
+    if cached and cached["fingerprint"] == file_fingerprint:
+        return cached["agent"], cached["checkpointer"], cached["reset_fn"]
+    
+    # Parmak izi farklı → ajan YENİDEN oluşturulur
+    agent, checkpointer, reset_fn = build_agent(...)
+    st.session_state["_agent_cache"] = {
+        "fingerprint": file_fingerprint,
+        "agent": agent, ...
+    }
+```
+
+**Tam akış:**
+
+```
+Kullanıcı sales.xlsx ile konuşma yapıyor (Turn 1-3 tamamlandı, df bellekte)
+  ↓
+Kullanıcı kenar çubuğundan customers.csv ekliyor
+  ↓
+Sonraki soru sorulduğunda:
+
+1. uploaded_fingerprint değişti:
+   ("sales.xlsx",) → ("sales.xlsx", "customers.csv")
+
+2. İKİ dosya birden sandbox'a yüklenir (upload_files)
+   (sales.xlsx zaten var ama üzerine yazılır — idempotent)
+
+3. file_fingerprint değişti → ajan cache'i geçersiz
+   → build_agent() tekrar çağrılır
+
+4. Yeni ajan oluşturulurken:
+   a. System prompt YENİDEN oluşturulur:
+      "Uploaded Files:
+       - /home/sandbox/sales.xlsx (2,400,000 bytes)
+       - /home/sandbox/customers.csv (150,000 bytes)"    ← YENİ dosya da var!
+   
+   b. Skill tespiti YENİDEN çalışır:
+      - sales.xlsx → xlsx skill
+      - customers.csv → csv skill
+      - 2 dosya → multi_file_joins.md referansı da yüklenir!   ← OTOMATİK!
+   
+   c. Yeni araçlar oluşturulur (parse_file artık 2 dosya biliyor)
+
+5. AMA: thread_id AYNI → checkpointer eski mesajları yükler
+   → Claude önceki 3 turn'ü hatırlıyor
+   → Claude "sales.xlsx'i zaten analiz ettim, şimdi customers.csv de var" diyor
+
+6. AMA: Kernel de AYNI → df hâlâ bellekte!
+   → Claude "df varsa yeniden yükleme" kuralına uyar
+   → Sadece yeni dosya için parse_file + execute yapar
+```
+
+**💡 Neden ajan yeniden oluşturuluyor ama konuşma sıfırlanmıyor?**
+
+Ajan yeniden oluşturma = yeni system prompt + yeni araçlar + yeni skill'ler.
+Bu ZORUNLU çünkü yeni dosyanın tipi farklı skill'ler gerektirebilir.
+
+Ama checkpointer thread_id aynı kaldığı için konuşma geçmişi **korunur**.
+Kernel de aynı container'da çalışmaya devam ettiği için değişkenler de **korunur**.
+
+**Sonuç:** Kullanıcı açısından sorunsuz bir deneyim — yeni dosya ekledi, ajan hem eski
+analizi hatırlıyor hem yeni dosyayı tanıyor.
+
+---
+
+### 14.5 Interceptor State Reset — Turn Bazlı Hafıza
+
+🔗 [graph.py:152-166](https://github.com/CYBki/code-execution-agent/blob/main/src/agent/graph.py#L152-L166)
+
+```python
+def reset_interceptor_state():
+    nonlocal _execute_count, _total_blocked
+    nonlocal _last_execute_failed, _correction_count, _consecutive_blocks
+    _execute_count = 0           # ← Execute sayacı sıfırla
+    _total_blocked = 0           # ← Engellenen çağrı sayacı sıfırla
+    _last_execute_failed = False # ← Hata durumu sıfırla
+    _correction_count = 0        # ← Düzeltme döngüsü sıfırla
+    _consecutive_blocks = 0      # ← Ardışık engel sayacı sıfırla
+    _seen_parse_files.clear()    # ← Görülen parse_file dosyaları sıfırla
+```
+
+🔗 [chat.py:608-610](https://github.com/CYBki/code-execution-agent/blob/main/src/ui/chat.py#L608-L610)
+
+```python
+# Her yeni kullanıcı mesajından ÖNCE çağrılır
+reset_fn()  # ← interceptor state sıfırla
+```
+
+**Bu neden gerekli?** Interceptor'ın sayaçları closure'da tutuluyor ve ajan cache'lendiğinden
+aynı closure yeni turda da kullanılır. Sıfırlamazsak:
+
+```
+Turn 1: 6 execute kullandı → _execute_count = 6
+Turn 2: reset_fn() çağrılmazsa → _execute_count hâlâ 6!
+  → İlk execute'da "Execute limit reached" hatası → ajan hiç kod çalıştıramaz!
+```
+
+**Ama `_seen_parse_files` neden temizleniyor?**
+Aynı dosyayı farklı turda tekrar parse etmek gerekebilir — kullanıcı "dosyanın şemasını
+tekrar göster" diyebilir. Turn bazlı sıfırlama buna izin verir.
+
+**💡 Neyi sıfırlıyoruz, neyi koruyoruz?**
+- ✅ Sıfırlanan (turn-scoped): execute sayacı, blok sayacı, hata durumu
+- ❌ Sıfırlanmayan (session-scoped): kernel değişkenleri, checkpointer mesajları, dosyalar
+
+---
+
+### 14.6 Geçmiş Konuşma Yükleme — Tam Akış
+
+🔗 [components.py:113-132](https://github.com/CYBki/code-execution-agent/blob/main/src/ui/components.py#L113-L132)
+
+```python
+if st.button(label, key=f"load_{conv['session_id']}"):
+    # 1. DB'den mesajları yükle
+    msgs = load_messages(conv["session_id"])
+    st.session_state["messages"] = msgs            # ← UI geçmişi geri geldi
+
+    # 2. session_id'yi eski konuşmanınki yap
+    st.session_state["session_id"] = conv["session_id"]  # ← Checkpointer thread_id
+
+    # 3. Ajan cache'ini temizle (yeni dosyalarla yeniden oluşturulacak)
+    st.session_state.pop("_agent_cache", None)
+    st.session_state.pop("_rendered_ids", None)
+    st.session_state.pop("_files_uploaded", None)
+
+    # 4. Dosyaları DB'den geri yükle
+    saved_files = load_files(conv["session_id"])
+    if saved_files:
+        st.session_state["uploaded_files"] = [
+            MockUploadedFile(f["name"], f["size"], f["data"]) for f in saved_files
+        ]
+```
+
+**Yüklenen ve yüklenmeyen:**
+
+```
+✅ Geri gelen:
+  - Mesaj geçmişi (UI + checkpointer)    → Kullanıcı eski konuşmayı görür
+  - Dosyalar (DB'den)                     → Sidebar'da dosyalar gözükür
+  - Checkpointer thread_id               → Claude eski mesajları hatırlar
+
+❌ Geri gelmeyen:
+  - Kernel değişkenleri (df, m, imports)  → Container sıfırlanmış veya farklı oturum
+  - Artifact'lar (HTML, chart, download)  → DB'ye kaydedilmiyor (binary, çok büyük)
+  - Interceptor state                     → Zaten her turn'de sıfırlanıyor
+```
+
+**Sonuç:** Eski konuşmaya dönüp yeni soru sorduğunda, Claude mesaj geçmişinden "df yüklemiştim"
+bilir ama kernel'da df yoktur. İlk execute'da hata alır, düzeltme döngüsüyle veriyi tekrar
+yükler. Kullanıcı açısından 1 execute "kaybedilir" ama akış devam eder.
+
+---
+
+### 14.7 "Yeni Konuşma" — Tam Sıfırlama
+
+🔗 [session.py:116-154](https://github.com/CYBki/code-execution-agent/blob/main/src/ui/session.py#L116-L154)
+
+```python
+def reset_session():
+    # 1. Artifact store temizliği
+    release_store(old_session_id)
+    
+    # 2. UI state sıfırlama
+    st.session_state["messages"] = []            # ← Mesaj geçmişi silindi
+    st.session_state["uploaded_files"] = []       # ← Dosyalar silindi
+    
+    # 3. YENİ session_id → YENİ checkpointer thread
+    new_session_id = str(uuid.uuid4())
+    st.session_state["session_id"] = new_session_id
+    
+    # 4. DB'de yeni konuşma oluştur
+    create_conversation(session_id=new_session_id, user_id=user_id)
+    
+    # 5. Ajan cache'ini temizle → yeni dosyalarla yeniden oluşturulacak
+    st.session_state.pop("_agent_cache", None)
+    
+    # 6. Sandbox: dosyaları sil + kernel sıfırla (container KALIR)
+    mgr.clean_workspace()
+```
+
+**Sıfırlanan her şey:**
+
+| Bileşen | Sıfırlama Yöntemi | Sonuç |
+|---------|-------------------|-------|
+| Mesaj geçmişi (UI) | `messages = []` | Ekran temiz |
+| Checkpointer geçmişi | Yeni `session_id` | Claude sıfırdan başlar |
+| Kernel değişkenleri | `clean_workspace()` | df, m, imports yok |
+| Sandbox dosyaları | `rm -rf /home/sandbox/*` | Disk temiz |
+| Ajan cache | `pop("_agent_cache")` | Yeni skill'lerle oluşturulacak |
+| Artifact store | `release_store()` | HTML/chart/download temiz |
+
+**Sıfırlanmayan:**
+- Docker container (hâlâ çalışıyor — 5 saniye tasarruf)
+- Pre-installed paketler (pandas, duckdb, weasyprint — hâlâ kurulu)
+- DB'deki eski konuşmalar (kenar çubuğunda hâlâ görünür)
+
+---
+
+### 14.8 Prompt Caching — Maliyet Hafızası
+
+🔗 [graph.py:579](https://github.com/CYBki/code-execution-agent/blob/main/src/agent/graph.py#L579)
+
+```python
+AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore"),
+```
+
+**Bu conversation memory değil ama ilişkili:** Anthropic'in prompt caching özelliği,
+aynı system prompt'u tekrar gönderdiğinde token'ları cache'den okur → **%90 daha ucuz**.
+
+```
+Turn 1: system_prompt (696 satır) → Claude'a gönderilir → Anthropic cache'e alır
+Turn 2: Aynı system_prompt → cache'den okunur → %90 indirim
+Turn 3: Aynı → cache → %90 indirim
+...
+```
+
+**Neden `unsupported_model_behavior="ignore"`?**
+Bazı modeller prompt caching desteklemez. `"ignore"` → hata fırlatmadan devam et.
+`"error"` → model cache desteklemezse uygulamayı çökertir.
+
+---
+
+### 14.9 Hafıza Akış Diyagramı — Her Senaryo
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ SENARYO 1: Aynı konuşmada ardışık sorular                          │
+│                                                                     │
+│ Turn 1: "Veriyi yükle"                                              │
+│   Checkpointer: [user1, ai1, tool1]     ← kaydedildi               │
+│   Kernel: df = 48500 satır              ← bellekte                  │
+│   DB: user1 + assistant1 mesajları      ← kaydedildi                │
+│                                                                     │
+│ Turn 2: "Müşteri analizi yap"                                      │
+│   Claude görür: [Turn1 mesajları] + [Turn2 user mesajı]             │
+│   Claude bilir: "df zaten bellekte, tekrar yükleme"                 │
+│   Kernel: df hâlâ var → direkt groupby yapabilir                    │
+│   reset_fn(): execute_count=0 (yeni kota)                           │
+│                                                                     │
+│ Turn 3: "PDF rapor üret"                                            │
+│   Claude görür: [Turn1 + Turn2 mesajları] + [Turn3 user]            │
+│   Claude bilir: "df ve m hâlâ bellekte"                             │
+│   Kernel: df + m var → direkt weasyprint ile PDF                    │
+├──────────────────────────────────────────────────────────────────────┤
+│ SENARYO 2: Yeni dosya eklendi (aynı konuşma)                       │
+│                                                                     │
+│ Turn 1-3: sales.xlsx ile analiz (yukarıdaki gibi)                   │
+│                                                                     │
+│ Kullanıcı: customers.csv ekliyor (sidebar'dan)                      │
+│   → file_fingerprint değişti → ajan YENİDEN oluşturulur             │
+│   → Yeni system prompt: 2 dosya + multi_file_joins skill'i          │
+│   → Checkpointer thread_id AYNI → eski mesajlar korunur             │
+│   → Kernel AYNI → df hâlâ bellekte                                  │
+│                                                                     │
+│ Turn 4: "İki dosyayı birleştir"                                     │
+│   Claude: Turn 1-3 geçmişini görür + yeni dosya bilgisini           │
+│   Kernel: df (sales) var + customers.csv sandbox'ta                  │
+│   → parse_file(customers.csv) + df2 = read_csv() + merge            │
+├──────────────────────────────────────────────────────────────────────┤
+│ SENARYO 3: "Yeni Konuşma" butonuna basıldı                         │
+│                                                                     │
+│ reset_session() →                                                    │
+│   Checkpointer: yeni thread_id → eski mesajlar ERİŞİLEMEZ          │
+│   Kernel: clean_workspace() → df, m, imports YOK                    │
+│   UI: messages = [] → ekran temiz                                   │
+│   Container: AYNI → paketler hâlâ kurulu (hızlı başlangıç)         │
+│   DB: eski konuşma DURUYOR → kenar çubuğundan geri yüklenebilir    │
+├──────────────────────────────────────────────────────────────────────┤
+│ SENARYO 4: Eski konuşma kenar çubuğundan yüklendi                  │
+│                                                                     │
+│ load_messages(old_session_id) →                                      │
+│   UI: eski mesajlar gösterilir ✅                                    │
+│   Checkpointer: old_session_id → eski thread geçmişi yüklenir ✅    │
+│   Dosyalar: DB'den MockUploadedFile olarak geri yüklenir ✅          │
+│   Kernel: SIFIRLANMIŞ → df YOK ❌                                   │
+│   Artifacts: DB'ye kaydedilmemiş → HTML/chart/download YOK ❌        │
+│                                                                     │
+│ İlk soru sorulduğunda:                                              │
+│   Claude: "df var sanıyorum" → execute → NameError!                 │
+│   Claude: "Ah, kernel sıfırlanmış" → re-read → devam eder           │
+│   1 execute "kaybedilir" ama akış otomatik düzelir                  │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 14.10 Rendered IDs — Mesaj Tekrarı Önleme
+
+🔗 [chat.py:619-621](https://github.com/CYBki/code-execution-agent/blob/main/src/ui/chat.py#L619-L621)
+
+```python
+if "_rendered_ids" not in st.session_state:
+    st.session_state["_rendered_ids"] = set()
+rendered_ids = st.session_state["_rendered_ids"]
+```
+
+🔗 [chat.py:427-431](https://github.com/CYBki/code-execution-agent/blob/main/src/ui/chat.py#L427-L431)
+
+```python
+msg_id = getattr(msg, "id", None)
+if msg_id and msg_id in rendered_ids:
+    continue  # ← Bu mesaj zaten render edildi, ATLA
+if msg_id:
+    rendered_ids.add(msg_id)
+```
+
+**Problem:** LangGraph stream'i, checkpointer'dan önceki mesajları da döndürebilir.
+Turn 2'de stream başlayınca, Turn 1'in mesajları da "updates" olarak gelebilir.
+
+**Çözüm:** Her render edilen mesajın `id`'si `_rendered_ids` set'ine eklenir.
+Aynı `id` tekrar geldiğinde atlanır → kullanıcı aynı mesajı iki kez görmez.
+
+**Neden `set` ve `list` değil?**
+`set`'te arama O(1), `list`'te O(n). 50 mesajlık bir konuşmada her chunk için
+50 kez kontrol gerekir → `set` çok daha hızlı.
+
+---
+
 ## Son Söz
 
 Bu dokümanı okuduysan artık her satırın ne yaptığını VE neden o şekilde yazıldığını
@@ -2670,6 +3239,7 @@ biliyorsun. Önemli tasarım kararları:
 9. **publish_html marker** — kernel → dosya → marker → artifact store → iframe
 10. **Circuit breaker** — sonsuz döngü tespiti ve durdurma
 11. **15 katmanlı bellek yönetimi** — sandbox, sunucu, disk, thread belleği koruması
+12. **3 katmanlı sohbet hafızası** — checkpointer + kernel + DB, her biri farklı ömür ve kapsam
 
 Her karar bir problemi çözüyor. Alternatifler denenip elenmiş. Bu doküman o sürecin
 kaydı.

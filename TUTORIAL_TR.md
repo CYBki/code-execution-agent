@@ -2968,6 +2968,212 @@ Sandbox'lar **2 saat TTL** ile oluşturulur. Kullanıcı tarayıcı sekmesini ka
 
 ---
 
+## Adım 18: Sohbet Hafızası (Conversation Memory) — Agent Nasıl Hatırlıyor?
+
+Agent'a bir soru sordun, cevapladı. Sonra ikinci soruyu sordun — önceki soruyu ve cevabını **hatırlıyor**. Peki bu nasıl çalışıyor? Yeni dosya eklersen ne oluyor? Eski konuşmaya geri dönersen?
+
+### 🔑 Üç Hafıza Katmanı
+
+Sistem üç **bağımsız** hafıza katmanı kullanıyor. Her birinin ömrü ve kapsamı farklı:
+
+```
+┌────────────────────────────────────────────────────────────────────────────┐
+│  KATMAN                  │ NE HATIRLAR?             │ NE ZAMAN SİLİNİR?   │
+├────────────────────────────────────────────────────────────────────────────┤
+│  1. LangGraph            │ Tüm mesaj geçmişi        │ "Yeni Konuşma" →     │
+│     Checkpointer         │ (user + AI + tool)        │  yeni thread_id      │
+│                          │                           │                      │
+│  2. Sandbox Kernel       │ Python değişkenleri       │ "Yeni Konuşma" →     │
+│     (Kalıcı Kernel)      │ (df, m, imports)          │  clean_workspace()   │
+│                          │                           │                      │
+│  3. Veritabanı           │ Mesajlar + dosyalar       │ Kullanıcı silene     │
+│     (SQLite/PostgreSQL)  │ (kalıcı arşiv)            │  kadar KALIR         │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Katman 1: LangGraph Checkpointer — "Agent Ne Konuştuğunu Hatırlıyor"
+
+Bu, ajanın **konuşma hafızası**. Her mesaj (kullanıcı sorusu, ajan yanıtı, tool çıktıları) bir `thread_id` altında disk'e kaydedilir.
+
+```python
+# graph.py — checkpointer oluşturma
+def _get_checkpointer():
+    if database_url.startswith("postgresql"):
+        return PostgresSaver.from_conn_string(database_url)  # Production
+    else:
+        return SqliteSaver(sqlite3.connect("data/checkpoints.db"))  # Development
+```
+
+**Nasıl çalışır?**
+
+```
+Turn 1: "Veriyi analiz et"
+  → agent.stream(..., config={"thread_id": "abc-123"})
+  → Claude yanıt verir, tüm mesajlar checkpointer'a kaydedilir
+
+Turn 2: "Müşteri segmentasyonu yap"  
+  → agent.stream(..., config={"thread_id": "abc-123"})  ← AYNI thread_id!
+  → Checkpointer Turn 1'in TÜM mesajlarını yükler
+  → Claude GÖRÜR: [Turn 1 mesajları] + [Turn 2 sorusu]
+  → Claude HATIRLAR: "df'yi önceki turda yükledim, bellekte"
+```
+
+**`thread_id` = `session_id`:** Her konuşma benzersiz bir `session_id` alıyor. Bu ID hem checkpointer'a hem sandbox'a veriliyor — böylece hafızalar aynı konuşmayı takip ediyor.
+
+> 💡 **Checkpointer olmasaydı?** Claude her turda sadece yeni mesajı görürdü. Önceki analizi, hangi dosyayı yüklediğini hatırlamazdı. Her seferinde sıfırdan başlardı.
+
+#### Summarization Middleware — Uzun Konuşmaları Yönetmek
+
+10 turlu bir konuşma = 50+ mesaj. Her mesajda kod çıktıları var. Toplamda yüz binlerce token → Claude'un context window'unu aşar.
+
+```python
+# graph.py — middleware zincirindeki İLK middleware
+middleware = [
+    create_summarization_middleware(model, backend),  # ← Eski mesajları özetler
+    AnthropicPromptCachingMiddleware(...),
+    PatchToolCallsMiddleware(),
+    smart_interceptor,
+]
+```
+
+Eski turların detaylı tool çıktıları kaldırılır, yerine kısa özet konur. Son 2-3 turn tam bırakılır (Claude'un ne yaptığını detaylı bilmesi gerekiyor).
+
+### Katman 2: Sandbox Kernel — "Agent Veriyi Hatırlıyor"
+
+Bu, kalıcı kernel kavramı — daha önce Adım 3'te detaylı anlattık. Ama hafıza bağlamında farklarını görelim:
+
+| Özellik | Checkpointer | Kernel |
+|---------|-------------|--------|
+| Ne saklar? | Mesaj metinleri | Python değişkenleri (df, m) |
+| Nerede? | Disk (SQLite/PostgreSQL) | Container RAM |
+| Claude görür mü? | EVET | HAYIR (sadece koddan bilir) |
+| Sayfa yenilenince? | ✅ Kalır | ✅ Kalır (container çalışıyor) |
+| "Yeni Konuşma"da? | ❌ Yeni thread | ❌ Kernel sıfırlanır |
+| Eski konuşma yüklenince? | ✅ Geçmiş geri gelir | ❌ df YOK! |
+
+> 💡 **Kritik fark:** Eski konuşmaya döndüğünde, Claude mesaj geçmişinden "df yükledim" bilir ama kernel'da df yoktur. İlk execute'da `NameError` alır → düzeltme döngüsüyle otomatik tekrar yükler.
+
+### Katman 3: Veritabanı — Kalıcı Arşiv
+
+```python
+# chat.py — her mesaj iki yere kaydedilir
+st.session_state["messages"].append({"role": "user", "content": query})  # RAM (UI)
+save_message(session_id, "user", query)                                    # Disk (DB)
+```
+
+DB'deki mesajlar **sonsuza kadar** kalır. Kenar çubuğundan eski konuşmaları yükleyebilirsin:
+
+```python
+# components.py — eski konuşma yükleme
+msgs = load_messages(conv["session_id"])       # DB'den mesajları yükle
+st.session_state["messages"] = msgs             # UI'a koy
+st.session_state["session_id"] = conv["session_id"]  # Checkpointer thread_id'yi ayarla
+saved_files = load_files(conv["session_id"])   # Dosyaları da geri yükle
+```
+
+### 4 Farklı Senaryo — Ne Zaman Ne Olur?
+
+#### Senaryo 1: Aynı konuşmada ardışık sorular ✅
+
+```
+Turn 1: "Veriyi yükle" → df bellekte, mesajlar checkpointer'da
+Turn 2: "Analiz yap"   → Claude Turn 1'i hatırlıyor, df hâlâ bellekte
+Turn 3: "PDF yap"      → Claude Turn 1-2'yi hatırlıyor, df + m bellekte
+```
+
+**Her şey çalışıyor** — en sorunsuz senaryo.
+
+#### Senaryo 2: Yeni dosya eklendi (aynı konuşma) ✅
+
+```
+Turn 1-3: sales.xlsx ile analiz
+Kullanıcı: customers.csv ekliyor (sidebar'dan)
+Turn 4: "İki dosyayı birleştir"
+```
+
+Ne olur:
+1. `file_fingerprint` değişti → **ajan yeniden oluşturulur** (yeni system prompt, yeni skill'ler)
+2. Ama `thread_id` AYNI → **checkpointer eski mesajları korur**
+3. Kernel de AYNI → **df hâlâ bellekte**
+4. Yeni skill'ler yüklendi (multi_file_joins.md — 2 dosya olduğu için otomatik)
+5. Claude: "sales.xlsx'i daha önce analiz ettim, şimdi customers.csv de var, birleştireyim"
+
+> 💡 **Ajan neden yeniden oluşturuluyor?** Yeni dosya farklı tip olabilir (CSV vs Excel) → farklı skill'ler gerekir. System prompt'a yeni dosya bilgisi eklenmeli. Ama konuşma sıfırlanmaz.
+
+#### Senaryo 3: "Yeni Konuşma" butonuna basıldı 🔄
+
+```python
+reset_session():
+    st.session_state["messages"] = []           # UI temiz
+    st.session_state["session_id"] = yeni_uuid  # Yeni checkpointer thread
+    st.session_state.pop("_agent_cache")        # Ajan yeniden oluşturulacak
+    mgr.clean_workspace()                        # Kernel + dosyalar sıfırlandı
+```
+
+**Her şey sıfırlanır** — ama eski konuşma DB'de kalır (kenar çubuğundan geri dönülebilir).
+
+#### Senaryo 4: Eski konuşma kenar çubuğundan yüklendi ⚠️
+
+```
+Geri gelen: Mesajlar ✅, dosyalar ✅, checkpointer geçmişi ✅
+Geri gelmeyen: Kernel değişkenleri ❌, artifact'lar (HTML/chart) ❌
+```
+
+İlk soru sorulduğunda:
+1. Claude: "df var sanıyorum" → execute → `NameError: df is not defined`
+2. Claude: "Kernel sıfırlanmış" → `df = pd.read_excel(...)` → devam
+3. 1 execute "kaybedilir" ama akış otomatik düzelir (correction loop)
+
+### Interceptor State Reset — Turn Bazlı Sıfırlama
+
+```python
+# graph.py — her yeni soru ÖNCE çağrılır
+def reset_interceptor_state():
+    _execute_count = 0       # Yeni kota
+    _total_blocked = 0       # Blok sayacı sıfır
+    _consecutive_blocks = 0  # Ardışık blok sayacı sıfır
+    _seen_parse_files.clear() # Parse geçmişi temiz
+```
+
+Bu neden gerekli? Ajan cache'lendiğinden interceptor'ın closure değişkenleri iki turn arasında yaşar. Turn 1'de 6 execute kullandıysan ve sıfırlamazsan, Turn 2'de ilk execute'da "limit reached" hatası alırsın.
+
+**Neyi sıfırlıyoruz, neyi koruyoruz?**
+- ✅ **Sıfırlanan:** execute sayacı, blok sayacı, parse geçmişi (turn-scoped)
+- ❌ **Korunan:** kernel değişkenleri, checkpointer mesajları, dosyalar (session-scoped)
+
+### Prompt Caching — Maliyet Hafızası
+
+```python
+AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore")
+```
+
+Aynı system prompt tekrar gönderildiğinde Anthropic cache'den okur → **%90 daha ucuz**. Konuşma hafızası değil ama her turn'de system prompt'u yeniden göndermek yerine cache'den okumak büyük maliyet tasarrufu.
+
+### Mesaj Tekrarı Önleme — `_rendered_ids`
+
+```python
+# chat.py — stream sırasında
+if msg_id and msg_id in rendered_ids:
+    continue  # Bu mesaj zaten gösterildi, ATLA
+rendered_ids.add(msg_id)
+```
+
+LangGraph stream'i, checkpointer'dan önceki mesajları da döndürebilir. `_rendered_ids` set'i ile aynı mesajın iki kez render edilmesi önlenir.
+
+### 📊 Hafıza Özet Tablosu
+
+| Eylem | Checkpointer | Kernel | DB | UI |
+|-------|-------------|--------|-----|-----|
+| Aynı konuşmada yeni soru | Eski mesajlar + yeni | Değişkenler duruyor | Yeni mesaj eklenir | Tüm mesajlar görünür |
+| Yeni dosya ekleme | Korunur (aynı thread) | Korunur (aynı container) | Dosya kaydedilir | Ajan yeniden oluşturulur |
+| "Yeni Konuşma" | Yeni thread (sıfır) | Sıfırlanır | Yeni conversation | Ekran temiz |
+| Eski konuşma yükleme | Eski thread geri | ⚠️ df YOK | Mesajlar + dosyalar yüklenir | Eski mesajlar görünür |
+| Sayfa yenileme (F5) | Kalır (disk'te) | Kalır (container çalışıyor) | Kalır | session_state'den geri yüklenir |
+
+> 🧪 **Kendin dene:** Bir dosya yükle, 3 soru sor. Sonra "Yeni Konuşma"ya bas, başka bir dosya yükle. Kenar çubuğundan eski konuşmaya dön — mesajların geri geldiğini ama ilk execute'da df'nin tekrar yüklendiğini gözlemle.
+
+---
+
 ## 🎓 Sonuç
 
 Bu tutorial boyunca şunları öğrendin:
@@ -2986,7 +3192,7 @@ Bu tutorial boyunca şunları öğrendin:
 11. **Veritabanının** konuşma ve dosya persistansını
 12. **Tüm akışın** uçtan uca nasıl çalıştığını
 
-**Production ekibi olarak (Adım 11-17):**
+**Production ekibi olarak (Adım 11-18):**
 13. **Docker mimarisi** — 4 container, nasıl bağlantılı, neden host network
 14. **Adım adım deployment** — sunucu hazırlama, build, doğrulama
 15. **Nginx reverse proxy** — HTTPS, WebSocket, rate limiting
@@ -2996,6 +3202,7 @@ Bu tutorial boyunca şunları öğrendin:
 19. **Sorun giderme** — 6 yaygın sorun ve çözüm prosedürleri
 20. **Ölçeklendirme** — kapasite hesabı, dikey/yatay ölçekleme, maliyet tahmini
 21. **Bellek yönetimi** — 15 koruma katmanı: sandbox, sunucu, disk, thread belleği
+22. **Sohbet hafızası** — 3 katmanlı hafıza: checkpointer, kernel, DB + 4 senaryo
 
 Bu proje, modern AI mühendisliğinin birçok ileri kalıbını bir araya getiriyor:
 - **ReAct ajanlar** (düşün → yap → gözlemle)
