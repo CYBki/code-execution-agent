@@ -25,6 +25,8 @@
 - [Adım 14: Yedekleme ve Felaket Kurtarma](#adım-14-yedekleme-ve-felaket-kurtarma)
 - [Adım 15: Sorun Giderme Runbook'u](#adım-15-sorun-giderme-runbooku)
 - [Adım 16: Ölçeklendirme ve Kapasite Planlaması](#adım-16-ölçeklendirme-ve-kapasite-planlaması)
+- [Adım 17: Bellek Yönetimi](#adım-17-bellek-yönetimi--sessiz-ama-kritik-savunma)
+- [Adım 18: Sohbet Hafızası (Conversation Memory)](#adım-18-sohbet-hafızası-conversation-memory--agent-nasıl-hatırlıyor)
 
 ---
 

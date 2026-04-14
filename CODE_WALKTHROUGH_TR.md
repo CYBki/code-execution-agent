@@ -26,6 +26,8 @@
 | 10 | [UI](#bölüm-10-kullanıcı-arayüzü) | Streaming — neden chunk chunk? |
 | 11 | [Giriş Noktası](#bölüm-11-giriş-noktası) | app.py — neden bu sıralama? |
 | 12 | [Uçtan Uca](#bölüm-12-uçtan-uca-akış) | Tam senaryo — her adımda ne oluyor? |
+| 13 | [Bellek Yönetimi](#bölüm-13-bellek-yönetimi--15-koruma-katmanı) | 15 koruma katmanı — sandbox, sunucu, disk |
+| 14 | [Sohbet Hafızası](#bölüm-14-sohbet-hafızası-conversation-memory--agent-nasıl-hatırlıyor) | 3 hafıza katmanı — checkpointer, kernel, DB |
 
 ---
 
