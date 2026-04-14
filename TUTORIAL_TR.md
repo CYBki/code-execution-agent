@@ -1,0 +1,1881 @@
+# 🎓 Code Execution Agent — Sıfırdan Ustaya Türkçe Tutorial
+
+> **Bu belge seni bu projenin her köşesini anlayacak seviyeye getirecek, adım adım, kod kod.**
+> Bir arkadaşınla kahve içerken sohbet eder gibi yazıldı. Teknik terimler açıklanacak, tasarım kararları sorgulanacak.
+
+---
+
+## 📑 İçindekiler
+
+- [Adım 0: Projeye Genel Bakış](#adım-0-projeye-genel-bakış)
+- [Adım 1: Uygulama Nasıl Başlıyor?](#adım-1-uygulama-nasıl-başlıyor-apppy)
+- [Adım 2: Oturum Yönetimi](#adım-2-oturum-yönetimi-srcuisessionpy)
+- [Adım 3: Sandbox Sistemi](#adım-3-sandbox-sistemi-srcsandboxmanagerpy)
+- [Adım 4: Skill Sistemi](#adım-4-skill-sistemi-progressive-disclosure)
+- [Adım 5: Araçlar (Tools)](#adım-5-araçlar-tools--ajanın-elleri)
+- [Adım 6: Ajanın Beyni](#adım-6-ajanın-beyni-srcagentgraphpy)
+- [Adım 7: Sistem Prompt'u](#adım-7-sistem-promptu-srcagentpromptspy)
+- [Adım 8: Kullanıcı Arayüzü](#adım-8-kullanıcı-arayüzü-ui)
+- [Adım 9: Veritabanı](#adım-9-veritabanı-srcstoragedbpy)
+- [Adım 10: Tüm Akış Birlikte](#adım-10-tüm-akış-birlikte-end-to-end)
+- [Bonus: Projeyi Geliştirmek İstersen](#bonus-projeyi-geliştirmek-i̇stersen)
+
+---
+
+## Adım 0: Projeye Genel Bakış
+
+### Bu Proje Ne Yapıyor?
+
+Bir kullanıcı düşün: elinde karmaşık bir Excel dosyası var, binlerce satır veri. Normal yol ne? Excel'i aç, pivot table yap, grafik çiz, Word'e yapıştır… Saatler sürer.
+
+Bu proje, o işi **AI'a yaptırıyor.** Kullanıcı dosyasını yükler, Türkçe bir soru sorar — "Müşteri başına ortalama sipariş nedir? PDF rapor ver." — ve birkaç saniye içinde:
+
+1. Veri okunur ve temizlenir
+2. Analiz yapılır
+3. PDF rapor üretilir (WeasyPrint ile)
+4. İnteraktif HTML dashboard oluşturulur (Chart.js ile)
+5. Kullanıcıya indirme butonu sunulur
+
+Hepsi **izole bir Docker container** içinde çalışır — kullanıcının kodu senin bilgisayarına zarar veremez.
+
+### Teknoloji Yığını
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    Kullanıcı (Tarayıcı)                 │
+└─────────────────────┬───────────────────────────────────┘
+                      │ HTTP
+┌─────────────────────▼───────────────────────────────────┐
+│              Streamlit UI (app.py)                       │
+│  ┌──────────┐ ┌──────────────┐ ┌──────────────────────┐ │
+│  │ Sidebar  │ │   Chat UI    │ │   Artifact Render    │ │
+│  │(upload)  │ │  (stream)    │ │ (HTML/PDF/chart)     │ │
+│  └──────────┘ └──────┬───────┘ └──────────────────────┘ │
+└──────────────────────┼──────────────────────────────────┘
+                       │
+┌──────────────────────▼──────────────────────────────────┐
+│            LangChain / LangGraph Agent                   │
+│  ┌────────────────────────────────────────────────────┐  │
+│  │  Smart Interceptor (güvenlik + otomatik düzeltme)  │  │
+│  └────────────────────────┬───────────────────────────┘  │
+│  ┌──────────┐ ┌───────────▼──┐ ┌────────────┐           │
+│  │parse_file│ │   execute    │ │generate_html│           │
+│  │(yerel)   │ │ (sandbox'a)  │ │ (artifact)  │           │
+│  └──────────┘ └───────┬──────┘ └────────────┘           │
+└───────────────────────┼─────────────────────────────────┘
+                        │ API
+┌───────────────────────▼─────────────────────────────────┐
+│           OpenSandbox (Docker Container)                  │
+│  ┌─────────────────────────────────────────────────────┐ │
+│  │     CodeInterpreter (Kalıcı Python Kernel)          │ │
+│  │  ┌─────────┐ ┌────────┐ ┌──────────┐ ┌──────────┐  │ │
+│  │  │ pandas  │ │ duckdb │ │weasyprint│ │matplotlib│  │ │
+│  │  └─────────┘ └────────┘ └──────────┘ └──────────┘  │ │
+│  └─────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────┘
+```
+
+| Katman | Teknoloji | Rol |
+|--------|----------|-----|
+| **UI** | Streamlit | Web arayüzü, dosya yükleme, chat |
+| **Ajan** | LangChain `create_agent` + Claude Sonnet 4 | Karar verme, ReAct döngüsü |
+| **Güvenlik** | Smart Interceptor | Her tool çağrısını denetleme |
+| **Sandbox** | OpenSandbox (Docker) | İzole Python çalıştırma |
+| **Veri İşleme** | pandas, DuckDB | Veri analizi |
+| **Raporlama** | WeasyPrint, Chart.js, matplotlib | PDF + dashboard |
+| **Veritabanı** | SQLite / PostgreSQL | Konuşma geçmişi |
+
+### Proje Dizin Yapısı
+
+```
+code-execution-agent/
+├── app.py                          # 🚀 Giriş noktası — her şey buradan başlar
+├── cleanup_sandboxes.py            # 🧹 Duran sandbox container'ları temizler
+│
+├── src/
+│   ├── agent/
+│   │   ├── graph.py                # 🧠 Ajanın beyni: build_agent + smart_interceptor
+│   │   └── prompts.py              # 📜 Sistem prompt'u: kurallar, ReAct şablonu
+│   │
+│   ├── sandbox/
+│   │   └── manager.py              # 📦 OpenSandbox yaşam döngüsü, kalıcı kernel
+│   │
+│   ├── skills/
+│   │   ├── registry.py             # 🎯 Skill tetikleyiciler (dosya tipi, boyut)
+│   │   ├── loader.py               # 📚 Skill dosyalarını yükle, prompt derle
+│   │   └── learner.py              # 🤖 Otomatik skill iyileştirme (LLM-as-judge)
+│   │
+│   ├── tools/
+│   │   ├── execute.py              # ⚡ Sandbox'ta kod çalıştır
+│   │   ├── file_parser.py          # 📋 Yerel dosya şeması çıkar (sandbox'a gitmez)
+│   │   ├── generate_html.py        # 🌐 HTML dashboard render
+│   │   ├── visualization.py        # 📊 matplotlib/seaborn PNG grafikler
+│   │   ├── download_file.py        # 📥 Sandbox'tan dosya indir
+│   │   └── artifact_store.py       # 🔗 Thread-safe köprü (ajan ↔ UI)
+│   │
+│   ├── ui/
+│   │   ├── chat.py                 # 💬 Chat arayüzü, ajan stream, artifact render
+│   │   ├── components.py           # 📁 Sidebar: dosya yükleme, konuşma geçmişi
+│   │   ├── session.py              # 🔑 Oturum yönetimi, sandbox ön-ısıtma
+│   │   └── styles.py               # 🎨 CSS stilleri, araç ikonları
+│   │
+│   ├── storage/
+│   │   └── db.py                   # 💾 SQLite/PostgreSQL — konuşma kaydetme
+│   │
+│   └── utils/
+│       ├── config.py               # ⚙️ API key çözümleme
+│       └── logging_config.py       # 📝 JSON log formatı, audit trail
+│
+├── skills/                         # 📖 Skill dosyaları (ajan talimatları)
+│   ├── xlsx/
+│   │   ├── SKILL.md                # Excel analiz kuralları
+│   │   └── references/
+│   │       ├── large_files.md      # ≥40MB DuckDB stratejisi
+│   │       └── multi_file_joins.md # Çoklu dosya JOIN
+│   ├── csv/SKILL.md                # CSV/TSV kuralları
+│   ├── pdf/SKILL.md                # PDF parsing kuralları
+│   └── visualization/SKILL.md      # Grafik kuralları
+│
+├── pyproject.toml                  # Bağımlılıklar
+├── CLAUDE.md                       # AI asistanlar için proje rehberi
+└── README.md                       # Kurulum ve kullanım
+```
+
+> 💡 **Neden böyle?**
+> Proje katmanlı mimari (layered architecture) kullanıyor. Her katman sadece altındaki katmanla konuşuyor:
+> UI → Agent → Tools → Sandbox. Bu sayede bir katmanı değiştirdiğinde diğerleri etkilenmez.
+
+---
+
+## Adım 1: Uygulama Nasıl Başlıyor? (`app.py`)
+
+`app.py` projenin **giriş noktası** — Streamlit uygulaması buradan başlıyor. Sadece 58 satır, ama çok şey yapıyor. Satır satır inceleyelim:
+
+```python
+"""Streamlit entry point — Data Analysis Agent with LangChain + OpenSandbox."""
+
+import os
+
+from dotenv import load_dotenv
+```
+
+İlk iş: `.env` dosyasından ortam değişkenlerini yükle. Bu dosyada API anahtarların var:
+- `ANTHROPIC_API_KEY` — Claude modeline erişim
+- `OPEN_SANDBOX_API_KEY` — OpenSandbox'a erişim
+- `OPEN_SANDBOX_DOMAIN` — OpenSandbox sunucu adresi
+
+```python
+from src.utils.logging_config import setup_logging
+
+setup_logging()
+```
+
+Yapılandırılmış JSON loglama başlatılıyor. Loglar üç yere yazılır:
+1. **Konsol** — geliştirme sırasında görürsün
+2. **`logs/app.log`** — tüm loglar (INFO+)
+3. **`logs/app_error.log`** — sadece hatalar (WARNING+)
+
+Her log satırı bir JSON nesnesi: timestamp, level, logger adı, session_id (korelasyon için), ve mesaj.
+
+```python
+import streamlit as st
+
+load_dotenv()
+
+st.set_page_config(
+    page_title="Data Analysis Agent",
+    page_icon="📊",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+```
+
+Streamlit sayfa yapılandırması. `layout="wide"` dashboard'ların geniş görünmesi için.
+
+```python
+from src.ui.styles import CUSTOM_CSS
+st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+```
+
+Özel CSS enjeksiyonu. `styles.py`'deki CSS, Claude-benzeri karanlık kod blokları, araç kartları, animasyonlu yükleme göstergeleri ekliyor. `unsafe_allow_html=True` olmadan Streamlit ham HTML'i göstermez.
+
+```python
+from src.utils.config import get_secret
+
+try:
+    get_secret("ANTHROPIC_API_KEY")
+except ValueError:
+    st.error("⚠️ ANTHROPIC_API_KEY bulunamadı. .env dosyasına ekleyin.")
+    st.stop()
+```
+
+API anahtarı doğrulaması. `get_secret()` fonksiyonu iki yere bakar:
+1. `st.secrets` — Streamlit Cloud'da çalışırken
+2. `os.environ` — yerel geliştirmede (`.env`'den yüklenen)
+
+Bulamazsa hata gösterir ve `st.stop()` ile uygulamayı durdurur. Sandbox anahtarı burada kontrol edilmez — sandbox oluşturulurken kontrol edilir.
+
+```python
+from src.storage.db import init_db
+init_db()
+```
+
+Veritabanı tablolarını oluşturur (yoksa). SQLite veya PostgreSQL — `DATABASE_URL` ortam değişkenine bağlı.
+
+```python
+from src.ui.session import init_session
+init_session()
+```
+
+Bu satır **çok kritik**. Oturum durumunu başlatıyor ve arka planda sandbox container'ını oluşturuyor. Detayları Adım 2'de göreceğiz.
+
+```python
+from src.ui.components import render_sidebar
+render_sidebar()
+```
+
+Sol paneli çizer: dosya yükleme widget'ı, yüklenen dosya listesi, "Yeni Konuşma" butonu, konuşma geçmişi.
+
+```python
+from src.ui.chat import render_chat
+render_chat()
+```
+
+Ana sohbet arayüzünü çizer: mesaj geçmişi, kullanıcı girdisi, ajan stream'i, artifact render.
+
+> 🔑 **Anahtar kavram: Streamlit Çalışma Modeli**
+> Streamlit "top-to-bottom" çalışır. Kullanıcı bir butona her tıkladığında veya mesaj yazdığında, **tüm script baştan çalışır**. Bu yüzden `st.session_state` çok önemli — sayfalar arası durumu korumak için kullanılıyor.
+
+> 🧪 **Kendin dene:**
+> `app.py`'nin ilk satırına `import time; time.sleep(2)` ekle ve sayfayı yenile. 2 saniye bekleyecek — çünkü Streamlit her seferinde tüm script'i çalıştırıyor.
+
+### Başlatma Sırası (Özet)
+
+```
+1. setup_logging()        → JSON loglar yapılandır
+2. load_dotenv()          → .env'den API anahtarlarını yükle
+3. st.set_page_config()   → Sayfa başlığı, layout
+4. CUSTOM_CSS inject      → Özel stiller
+5. get_secret() validate  → ANTHROPIC_API_KEY kontrol
+6. init_db()              → SQLite/PostgreSQL tablolar
+7. init_session()         → Session state + sandbox ön-ısıtma 🔥
+8. render_sidebar()       → Sol panel UI
+9. render_chat()          → Ana chat UI
+```
+
+---
+
+## Adım 2: Oturum Yönetimi (`src/ui/session.py`)
+
+### Session State Nedir?
+
+Streamlit'te her sayfa yenilemesinde Python değişkenleri sıfırlanır. Ama chat geçmişini, yüklenen dosyaları, sandbox bağlantısını kaybetmek istemezsin. İşte `st.session_state` bunun için var — tarayıcı sekmesi açık olduğu sürece yaşayan bir sözlük.
+
+### `init_session()` — Oturumun Kalbi
+
+```python
+def init_session():
+    """Initialize Streamlit session state with all required keys."""
+    if "initialized" in st.session_state:
+        return  # Zaten başlatılmış, tekrar yapma
+```
+
+İlk satır: tekrar çalıştırmayı önlüyor. Streamlit her interaksiyonda tüm script'i çalıştırdığından, bu kontrol olmadan her tıklamada yeni sandbox oluşturulurdu.
+
+```python
+    # Core state
+    st.session_state.setdefault("messages", [])           # Chat geçmişi
+    st.session_state.setdefault("session_id", str(uuid4()))  # Benzersiz oturum ID
+    st.session_state.setdefault("user_id", "default_user")
+    st.session_state.setdefault("uploaded_files", [])     # Yüklenen dosyalar
+```
+
+`setdefault()` kullanımı önemli — sadece anahtar yoksa değer atar. Bu sayede mevcut değerleri ezmez.
+
+### Sandbox Ön-Isıtma (Pre-warming)
+
+İşte burada büyü başlıyor:
+
+```python
+    if "sandbox_manager" not in st.session_state:
+        st.session_state["sandbox_manager"] = SandboxManager()
+
+    if "sandbox_prewarm_done" not in st.session_state:
+        st.session_state["sandbox_prewarm_done"] = True
+
+        _mgr = st.session_state["sandbox_manager"]
+        _thread_id = st.session_state["session_id"]
+
+        def _prewarm(mgr, thread_id):
+            try:
+                mgr.get_backend(thread_id)
+            except Exception as e:
+                logger.error("Sandbox pre-warm failed: %s", e)
+
+        threading.Thread(
+            target=_prewarm, args=(_mgr, _thread_id), daemon=True
+        ).start()
+```
+
+> 💡 **Neden böyle?**
+> Sandbox oluşturmak ~5 saniye sürüyor (Docker container başlatma). Kullanıcı daha soru sormadan, **arka plan thread'inde** sandbox'ı hazırlıyoruz. Kullanıcı ilk sorusunu yazdığında sandbox zaten hazır. Buna **pre-warming** (ön-ısıtma) deniyor.
+>
+> Düşün ki bir restoranda fırını müşteri sipariş vermeden önce ısıtıyorsun. Sipariş gelince hemen pişirmeye başlıyorsun.
+
+`daemon=True` detayı: ana program kapanınca bu thread de otomatik kapanır — zombie thread oluşmaz.
+
+### MockUploadedFile — Veritabanından Dosya Yükleme
+
+```python
+class MockUploadedFile:
+    """Simulates a Streamlit UploadedFile for files loaded from DB."""
+    def __init__(self, name: str, size: int, data: bytes):
+        self.name = name
+        self.size = size
+        self._data = data
+
+    def getvalue(self) -> bytes:
+        return self._data
+
+    def read(self) -> bytes:
+        return self._data
+
+    def seek(self, pos: int):
+        pass  # No-op: getvalue() always returns full content
+```
+
+> 💡 **Neden böyle?**
+> Kullanıcı geçmiş bir konuşmaya geri dönünce, dosyaları veritabanından yüklüyoruz. Ama kodun geri kalanı Streamlit'in `UploadedFile` nesnesini bekliyor. `MockUploadedFile` aynı arayüzü (interface) taklit ediyor — `name`, `size`, `getvalue()`, `read()`, `seek()`. Kodun geri kalanı farkı anlamıyor.
+>
+> Bu bir **duck typing** örneği: "Ördek gibi yürüyorsa ve ördek gibi vaklıyorsa, o bir ördektir."
+
+### `reset_session()` — Temiz Başlangıç
+
+```python
+def reset_session():
+    """Reset all session state for a new conversation."""
+    for key in list(st.session_state.keys()):
+        if key not in ("user_id",):
+            del st.session_state[key]
+```
+
+"Yeni Konuşma" butonuna basınca çağrılır. `user_id` hariç her şeyi siler — yeni oturum ID, yeni sandbox, temiz chat geçmişi.
+
+> 🧪 **Kendin dene:**
+> Uygulamayı çalıştır, bir dosya yükle, soru sor. Sonra "Yeni Konuşma"ya bas. Dosya ve chat geçmişi sıfırlanır ama önceki konuşma sol panelde "Geçmiş Konuşmalar" altında görünür.
+
+---
+
+## Adım 3: Sandbox Sistemi (`src/sandbox/manager.py`)
+
+### OpenSandbox Nedir?
+
+**OpenSandbox**, Docker container içinde çalışan izole bir Python ortamı. Kullanıcının kodu senin bilgisayarında değil, ayrı bir container'da çalışır. Bu sayede:
+
+- 🛡️ **Güvenlik:** Zararlı kod sisteme zarar veremez
+- 📦 **İzolasyon:** Her oturum kendi container'ında çalışır
+- 🔄 **Tekrarlanabilirlik:** Aynı paketler, aynı ortam
+
+Bir analoji: Sandbox bir **laboratuvar eldiveni kutusu** (glove box) gibi. İçinde ne yaparsan yap, dışarıyı etkilemez.
+
+### SandboxManager vs OpenSandboxBackend
+
+Bu iki sınıf farklı sorumluluklar taşıyor:
+
+| Sınıf | Rol | Analoji |
+|-------|-----|---------|
+| `SandboxManager` | Container yaşam döngüsü yönetimi | **Otopark yöneticisi** — arabaları park ettirir |
+| `OpenSandboxBackend` | Kod çalıştırma, dosya yükleme/indirme | **Arabanın kendisi** — seni A'dan B'ye götürür |
+
+### Container Oluşturma
+
+```python
+def _create_new_sandbox(self, thread_id: str) -> OpenSandboxBackend:
+    """Create sandbox container + CodeInterpreter + persistent Python context."""
+    sandbox = SandboxSync.create(
+        "agentic-sandbox:v1",                          # Docker image adı
+        entrypoint=["/opt/opensandbox/code-interpreter.sh"],
+        env={"PYTHON_VERSION": "3.11"},
+        timeout=timedelta(hours=2),                     # 2 saat sonra otomatik silinir
+    )
+```
+
+Birkaç kritik detay:
+- **`agentic-sandbox:v1`** — özel bir Docker image. pandas, duckdb, weasyprint, matplotlib gibi paketler **önceden kurulu**. Her sorgu için pip install yapmaya gerek yok.
+- **`timeout=timedelta(hours=2)`** — 2 saat boyunca kullanılmazsa container silinir. Kaynak tasarrufu.
+- **`entrypoint`** — CodeInterpreter shell script'i, Python kernel'ı başlatıyor.
+
+### 🔑 Kalıcı Kernel (Persistent Kernel) — En Önemli Kavram
+
+```python
+    interpreter = sandbox.code_interpreter
+    py_context = interpreter.codes.create_context(SupportedLanguage.PYTHON)
+    self._py_context = py_context
+```
+
+**Bu üç satır projenin en kritik tasarım kararını temsil ediyor.**
+
+`py_context` bir **kalıcı Python oturumu**. Normal bir script çalıştırıp kapattığında değişkenler kaybolur. Ama burada:
+
+```python
+# Execute çağrısı #1:
+df = pd.read_excel('/home/sandbox/data.xlsx')
+df = df.dropna(subset=['CustomerID'])
+print(f"✅ {len(df):,} satır yüklendi")
+
+# Execute çağrısı #2 (ayrı bir tool call, ama AYNI kernel):
+# df HÂLÂ bellekte! Tekrar okumaya gerek yok.
+summary = df.groupby('Category')['Revenue'].sum()
+print(summary)
+
+# Execute çağrısı #3:
+# Hem df hem summary hâlâ burada!
+m = {'total': len(df), 'top': summary.idxmax()}
+```
+
+> 💡 **Neden böyle?**
+> Alternatif ne olurdu? Her execute çağrısında veriyi yeniden okumak. 100MB'lık bir Excel dosyasını 6 kez okumak hem yavaş hem gereksiz.
+>
+> Jupyter notebook kullandıysan aynı mantık: bir hücrede `df = ...` yazarsın, sonraki hücrelerde `df` hâlâ orada.
+
+**İSTİSNA:** `generate_html()` aracı **ayrı bir process'te** çalışır — Python değişkenlerini göremez. HTML string'ini `execute()` içinde oluşturup literal olarak `generate_html()`'e geçirmen gerekir.
+
+### `execute()` Metodunun İç Çalışması
+
+```python
+def execute(self, command: str) -> ExecuteResult:
+    """Run code in the persistent Python kernel."""
+```
+
+Bu metot gelen komutu analiz eder:
+
+```python
+    py_code = self._extract_python_code(command)
+    if py_code:
+        # Python kodu tespit edildi → base64 kodla → CodeInterpreter'a gönder
+        b64 = base64.b64encode(py_code.encode()).decode()
+        tmp_path = f"/tmp/_run_{uuid.uuid4().hex[:8]}.py"
+        shell_cmd = (
+            f"printf '%s' '{b64}' | base64 -d > {tmp_path} "
+            f"&& python3 {tmp_path} && rm -f {tmp_path}"
+        )
+    else:
+        shell_cmd = command
+```
+
+> 💡 **Neden base64?**
+> Python kodu içinde tek tırnak, çift tırnak, yeni satırlar, özel karakterler olabilir. Bunları doğrudan shell komutuna yazmak kabus. Base64 kodlama tüm bu sorunları çözer:
+> 1. Kodu base64'e çevir (güvenli ASCII)
+> 2. Geçici dosyaya yaz
+> 3. Python ile çalıştır
+> 4. Geçici dosyayı sil
+
+### `publish_html()` Helper Enjeksiyonu
+
+```python
+def _inject_publish_html(self) -> None:
+    """Inject publish_html() helper into sandbox kernel."""
+    code = """
+import json as _json, pathlib as _pathlib
+
+def publish_html(html_str: str) -> None:
+    p = _pathlib.Path('/home/sandbox/.artifacts')
+    p.mkdir(exist_ok=True)
+    idx = len(list(p.glob('artifact_*.html')))
+    out = p / f'artifact_{idx}.html'
+    out.write_text(html_str, encoding='utf-8')
+    print(f'✅ HTML artifact: {out.name}')
+"""
+```
+
+Bu fonksiyon sandbox kernel'ına **önceden enjekte** ediliyor. Ajan kodunda `publish_html(html_string)` çağırdığında, HTML dosyası sandbox'un disk'ine yazılıyor. Ardından ana uygulama bu dosyayı okuyup iframe içinde render ediyor.
+
+> 🔑 **Anahtar kavram: Factory Pattern**
+> Sandbox aracılığıyla hem `execute()`, hem `download_file()`, hem `create_visualization()` çalışıyor. Hepsi aynı `backend` nesnesini paylaşıyor. Bu nedenle her araç bir **factory fonksiyonu** ile oluşturuluyor:
+> ```python
+> execute_tool = make_execute_tool(backend, session_id)
+> download_tool = make_download_file_tool(backend, session_id)
+> ```
+> Factory pattern sayesinde backend referansı closure ile yakalanıyor ve her araç aynı sandbox'a erişiyor.
+
+### Dosya Yükleme
+
+```python
+def upload_files(self, files) -> None:
+    """Upload files to the sandbox /home/sandbox/ directory."""
+    for f in files:
+        f.seek(0)
+        self._backend.upload_file(f.getvalue(), f"/home/sandbox/{f.name}")
+```
+
+Yüklenen dosyalar sandbox'un `/home/sandbox/` dizinine kopyalanır. Bu yol sabittir — ajan her zaman dosyaları burada arar.
+
+> 🧪 **Kendin dene:**
+> Bir Excel dosyası yükle. Logları izle (`logs/app.log`). `"Creating OpenSandbox sandbox"` ve `"Persistent Python context created"` mesajlarını göreceksin.
+
+---
+
+## Adım 4: Skill Sistemi (Progressive Disclosure)
+
+### Progressive Disclosure Nedir?
+
+Bir öğretmenin her derste tüm ders kitabını okutmamasını düşün. Sadece o gün işlenecek konuyu verir. Skill sistemi de aynı mantıkla çalışıyor:
+
+- Kullanıcı `.xlsx` yükledi → Excel kurallarını ver
+- Dosya 40MB'dan büyük → DuckDB stratejisini de ver
+- İki dosya yüklendi → Multi-file JOIN kurallarını da ver
+- Sadece `.csv` yükledi → CSV kurallarını ver, Excel kurallarını verme
+
+Bu yaklaşıma **progressive disclosure** deniyor. Ajana gereksiz bilgi vermek onu yavaşlatır ve hata yapma ihtimalini artırır.
+
+### Registry — Skill Tetikleyiciler (`src/skills/registry.py`)
+
+```python
+SKILL_TRIGGERS: list[SkillTrigger] = [
+    SkillTrigger(
+        name="xlsx",
+        extensions=[".xlsx", ".xls", ".xlsm"],
+        keywords=["excel", "spreadsheet", "workbook", "çalışma kitabı"],
+    ),
+    SkillTrigger(
+        name="csv",
+        extensions=[".csv", ".tsv"],
+        keywords=["csv", "comma separated", "tab separated"],
+    ),
+    SkillTrigger(
+        name="pdf",
+        extensions=[".pdf"],
+        keywords=["pdf", "document"],
+    ),
+    SkillTrigger(
+        name="visualization",
+        extensions=[],
+        keywords=["chart", "plot", "graph", "grafik", "görsel", "dashboard"],
+    ),
+]
+```
+
+Her `SkillTrigger` iki koşuldan birini kontrol eder:
+1. **Dosya uzantısı:** Yüklenen dosyanın uzantısı eşleşiyor mu?
+2. **Anahtar kelime:** Kullanıcının sorgusu bu kelimeleri içeriyor mu?
+
+```python
+def detect_required_skills(uploaded_files: list, user_query: str = "") -> list[str]:
+    """Detect which skills should be loaded based on files + query."""
+    active = set()
+    extensions = {os.path.splitext(f.name)[1].lower() for f in uploaded_files}
+    query_lower = user_query.lower()
+
+    for trigger in SKILL_TRIGGERS:
+        # Uzantı eşleşmesi
+        if any(ext in extensions for ext in trigger.extensions):
+            active.add(trigger.name)
+        # Anahtar kelime eşleşmesi
+        if any(kw in query_lower for kw in trigger.keywords):
+            active.add(trigger.name)
+
+    return sorted(active) or ["xlsx"]  # Varsayılan: xlsx
+```
+
+### Reference Dosyaları — Koşullu Yükleme
+
+```python
+REFERENCE_TRIGGERS: list[ReferenceTrigger] = [
+    ReferenceTrigger(
+        skill="xlsx",
+        path="skills/xlsx/references/large_files.md",
+        condition=lambda files, query: (
+            any(f.size >= 40 * 1024 * 1024 for f in files)  # ≥40MB
+            or any(kw in query.lower() for kw in ["duckdb", "büyük dosya", "large file"])
+        ),
+    ),
+    ReferenceTrigger(
+        skill="xlsx",
+        path="skills/xlsx/references/multi_file_joins.md",
+        condition=lambda files, query: (
+            len(files) >= 2
+            or any(kw in query.lower() for kw in ["join", "merge", "birleştir", "eşleştir"])
+        ),
+    ),
+]
+```
+
+Reference dosyaları **koşullu** yüklenir:
+- `large_files.md` → sadece dosya ≥40MB olduğunda veya "duckdb" kelimesi geçtiğinde
+- `multi_file_joins.md` → sadece 2+ dosya yüklendiğinde veya "join"/"birleştir" kelimesi geçtiğinde
+
+> 💡 **Neden böyle?**
+> Claude'un context window'u sınırlı (200K token). Her sorguya 1000 satırlık DuckDB rehberini göndermek israf olur. Sadece gerektiğinde yükliyoruz — hem token tasarrufu, hem odaklanmış talimat.
+
+### Loader — Prompt Derleme (`src/skills/loader.py`)
+
+```python
+@lru_cache(maxsize=32)
+def load_skill(skill_name: str) -> dict | None:
+    """Load a SKILL.md file and parse its YAML frontmatter + instructions."""
+    skill_path = Path(f"skills/{skill_name}/SKILL.md")
+    content = skill_path.read_text(encoding="utf-8")
+    # YAML frontmatter'ı ayır: ---\nname: xlsx\n---
+    if content.startswith("---\n"):
+        end = content.find("\n---\n", 4)
+        frontmatter = yaml.safe_load(content[4:end])
+        instructions = content[end + 5:]
+    else:
+        frontmatter, instructions = {}, content
+    return {"name": ..., "instructions": instructions, ...}
+```
+
+`@lru_cache(maxsize=32)` — aynı skill dosyasını tekrar tekrar diskten okumak yerine bellekte tutuyor. İlk okumadan sonra hızlı.
+
+```python
+def compose_system_prompt(base_prompt, active_skills, uploaded_files, user_query):
+    """Build system prompt with dynamically loaded skills + reference files."""
+    prompt_parts = [base_prompt]
+
+    for skill_name in active_skills:
+        skill = load_skill(skill_name)
+        prompt_parts.append(f"# {skill['name']} Expertise\n\n{skill['instructions']}")
+
+        # Progressive disclosure: referans dosyalarını koşullu yükle
+        ref_paths = detect_reference_files(skill_name, uploaded_files, user_query)
+        for ref_path in ref_paths:
+            ref_content = load_reference(ref_path)
+            prompt_parts.append(f"## {ref_name} (Reference)\n\n{ref_content}")
+
+    return "\n\n".join(prompt_parts)
+```
+
+**Sonuç prompt şu formatta birleşir:**
+
+```
+[Base System Prompt — ReAct kuralları, genel talimatlar]
+
+# xlsx Expertise
+[SKILL.md içeriği — Excel analiz kuralları]
+
+## Large Files (Reference)          ← sadece ≥40MB dosya varsa
+[large_files.md içeriği]
+
+## Multi File Joins (Reference)     ← sadece 2+ dosya varsa
+[multi_file_joins.md içeriği]
+```
+
+### Learner — Otomatik Skill İyileştirme (`src/skills/learner.py`)
+
+Bu dosya projenin en ilginç parçalarından biri. Ajan hata yaptığında **otomatik olarak öğreniyor**:
+
+```
+Ajan hata yapıyor
+    ↓
+LLM-as-judge çıktıyı puanlıyor (Haiku, maliyet düşük)
+    ↓
+Puan < 0.7 ve skill_issue = true?
+    ↓ Evet
+Hataları çıkar → Sonnet'e gönder → SKILL.md iyileştirme önerisi al
+    ↓
+Öneriyi SKILL.md'ye otomatik ekle
+    ↓
+Sonraki soruda ajan bu kuralı da görecek
+```
+
+```python
+def auto_learn(user_query, agent_final_response, collected_steps, uploaded_files, threshold=0.7):
+    # 1. Çıktıyı puanla
+    judge_result = judge_output(user_query, agent_final_response, collected_steps, uploaded_files)
+
+    # 2. Düşük puan + skill sorunu?
+    if judge_result.score < threshold and judge_result.skill_issue:
+        # 3. Hataları çıkar
+        errors = extract_errors(collected_steps)
+
+        # 4. İyileştirme önerisi üret
+        suggestion = generate_skill_suggestion(errors, skill_name, user_query)
+
+        # 5. SKILL.md'ye ekle
+        _apply_skill_suggestion_auto(suggestion)
+```
+
+Bu `auto_learn` fonksiyonu **arka plan thread'inde** çalışır — kullanıcıyı bekletmez:
+
+```python
+# chat.py'den:
+threading.Thread(
+    target=auto_learn,
+    kwargs={...},
+    daemon=True,
+    name="auto_learn",
+).start()
+```
+
+> 💡 **Neden böyle?**
+> Ajan aynı hatayı tekrar tekrar yapıyorsa, bir insanın gelip SKILL.md'yi düzeltmesini beklemek yerine, sistem kendini düzeltiyor. Ama güvenlik önlemleri var:
+> - `_MAX_SKILL_FILE_BYTES = 50_000` — SKILL.md 50KB'ı geçerse ekleme yapmaz
+> - `_MAX_SUGGESTION_CHARS = 3000` — çok uzun öneriler kesilir
+> - `_MIN_SUGGESTION_CHARS = 20` — çok kısa öneriler reddedilir
+> - `_REPEAT_OVERRIDE_THRESHOLD = 3` — aynı hata 3 kez tekrarlanırsa zorunlu güncelleme
+
+---
+
+## Adım 5: Araçlar (Tools) — Ajanın Elleri
+
+Ajan tek başına hiçbir şey yapamaz. Düşünür, karar verir, ama **işi araçlar yapar**. Tıpkı bir cerrahın ellerini (araçları) kullanması gibi.
+
+### Araç Genel Bakış
+
+| Araç | Dosya | Ne yapar | Sandbox'a gider mi? |
+|------|-------|----------|---------------------|
+| `parse_file` | `file_parser.py` | Dosya şemasını çıkarır | ❌ Yerel |
+| `execute` | `execute.py` | Python kodu çalıştırır | ✅ Sandbox |
+| `generate_html` | `generate_html.py` | HTML dashboard render | ❌ Yerel (iframe) |
+| `create_visualization` | `visualization.py` | matplotlib/seaborn PNG | ✅ Sandbox |
+| `download_file` | `download_file.py` | Dosya indirme butonu | ✅ Sandbox |
+
+### 1. `parse_file` — Şema Keşfi
+
+```python
+@tool
+def parse_file(filename: str) -> str:
+    """Parse an uploaded file and return its schema summary."""
+    # Dosya uzantısına göre parser seç
+    ext = os.path.splitext(filename)[1].lower()
+    parser = PARSERS.get(ext)  # {".csv": _parse_csv, ".xlsx": _parse_excel, ...}
+
+    target.seek(0)
+    data = target.getvalue()
+    result = parser(data, filename)
+```
+
+**Kritik detay:** Bu araç **sandbox'a gitmez**. Dosya Streamlit'in belleğinde zaten var — yerel olarak parse eder. Bu yüzden `execute` kotasını tüketmez ve çok hızlıdır.
+
+Excel parser'ı özellikle akıllı:
+
+```python
+def _parse_excel(file_bytes, filename):
+    # openpyxl ile hücre formatlarını oku
+    wb = load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
+
+    for col in df.columns:
+        if dtype in ('datetime64[ns]',):
+            # Excel'in hücre format string'ini Python strftime'a çevir
+            py_fmt = _excel_numfmt_to_strftime(cell.number_format)
+            # Örnek: 'mm/dd/yyyy' → '%m/%d/%Y'
+```
+
+Parse sonrası çıktıya eklenen mesaj, ajanı **doğru yola yönlendirir**:
+
+```
+✅ PARSE BAŞARILI. SONRAKI ADIM:
+❌ YAPMA: ls, cat, os.listdir, parse_file tekrar çağırma
+✅ YAP:
+1. DÜŞÜNCE yaz: 'Schema alındı. Dosya /home/sandbox/data.xlsx...'
+2. execute() çağır:
+   df = pd.read_excel('/home/sandbox/data.xlsx')
+```
+
+> 💡 **Neden böyle?**
+> LLM'ler bazen `ls` veya `os.listdir()` çağırarak dosya sistemi keşfi yapmak ister. Ama sandbox'ta buna gerek yok — dosya yolları zaten biliniyor. Parse çıktısındaki talimat, ajanı gereksiz adımlardan uzak tutarak execute kotasını koruyor.
+
+### 2. `execute` — Kod Çalıştırma
+
+```python
+def make_execute_tool(backend: OpenSandboxBackend, session_id: str = ""):
+    @tool
+    def execute(command: str) -> str:
+        """Run Python code or shell command in the sandbox."""
+        result = backend.execute(command)
+        output = result.output
+
+        # publish_html() çağrısını tespit et → artifact'e ekle
+        if "✅ HTML artifact:" in output:
+            _collect_html_artifacts(backend, session_id)
+
+        return output
+    return execute
+```
+
+`execute` aracı sandbox'taki kalıcı kernel'da kod çalıştırır. Önceki execute'larda tanımlanan değişkenler, import'lar ve DataFrame'ler hâlâ bellekte.
+
+**`publish_html()` tespiti:** Kod içinde `publish_html()` çağrıldıysa (çıktıda `"✅ HTML artifact:"` mesajı), sandbox'tan HTML dosyalarını indirip ArtifactStore'a ekler.
+
+**Retry mekanizması:**
+```python
+        max_retries = 2
+        for attempt in range(max_retries + 1):
+            try:
+                result = backend.execute(command)
+                break
+            except Exception as e:
+                if attempt < max_retries:
+                    time.sleep(1)
+                    continue
+                return f"Error after {max_retries + 1} attempts: {e}"
+```
+
+Ağ hataları veya geçici sorunlarda otomatik yeniden deneme.
+
+### 3. `generate_html` — HTML Dashboard
+
+```python
+def make_generate_html_tool(session_id: str = ""):
+    @tool
+    def generate_html(html_code: str) -> str:
+        """Render HTML/CSS/JS in the browser as an interactive artifact."""
+        injected = inject_height_script(html_code)
+        get_store(session_id).add_html(injected)
+        return "HTML rendered successfully in browser iframe."
+    return generate_html
+```
+
+Bu araç sandbox'a **gitmez**. HTML string'ini doğrudan ArtifactStore'a ekler. Streamlit tarafında `st.components.html()` ile iframe içinde gösterilir.
+
+**Height script enjeksiyonu:**
+```javascript
+function _reportHeight() {
+    const h = document.body.scrollHeight;
+    window.parent.postMessage({type: 'streamlit:setFrameHeight', height: h}, '*');
+}
+```
+
+Bu script iframe'in yüksekliğini içeriğe göre ayarlıyor — kaydırma çubuğu oluşmaz.
+
+> ⚠️ **Önemli fark: `generate_html` vs `publish_html`**
+>
+> | | `generate_html` | `publish_html` |
+> |---|---|---|
+> | Nerede çalışır | Ajan thread'inde (yerel) | Sandbox kernel'ında |
+> | Değişkenlere erişir mi? | ❌ Hayır | ✅ Evet (kernel değişkenleri) |
+> | Ne zaman kullan | Statik HTML, veri bağımsız | Analiz verisiyle dashboard |
+> | Örnek | Boş şablon, bilgi sayfası | `m['total']` içeren grafik |
+
+### 4. `create_visualization` — Statik Grafikler
+
+```python
+@tool
+def create_visualization(code: str) -> str:
+    """Generate a static chart (PNG) by running matplotlib/seaborn code in the sandbox."""
+    wrapped_code = code + "\nimport matplotlib; matplotlib.pyplot.close('all')"
+    exec_result = backend.execute(wrapped_code)
+
+    # /home/sandbox/chart.png dosyasını indir
+    responses = backend.download_files([f"{SANDBOX_HOME}/chart.png"])
+    get_store(session_id).add_chart(resp.content, code)
+```
+
+Sandbox'ta matplotlib/seaborn kodu çalıştırıp PNG çıktıyı indirir. `plt.close('all')` otomatik ekleniyor — bellek sızıntısını önler.
+
+### 5. `download_file` — Dosya İndirme
+
+```python
+@tool
+def download_file(file_path: str) -> str:
+    """Make a file from the sandbox available for the user to download."""
+    ALLOWED_PREFIX = SANDBOX_HOME + "/"
+    if not file_path.startswith(ALLOWED_PREFIX):
+        return f"❌ Only files under {ALLOWED_PREFIX} can be downloaded."
+
+    responses = backend.download_files([file_path])
+    # Excel dosyalarında tarih temizliği
+    if filename.lower().endswith(('.xlsx', '.xlsm')):
+        file_content = _clean_excel_dates(file_content)
+
+    get_store(session_id).add_download(file_content, filename, file_path)
+```
+
+İki özel özellik:
+1. **Güvenlik:** Sadece `/home/sandbox/` altındaki dosyalar indirilebilir
+2. **Excel tarih temizliği:** `_clean_excel_dates()` — datetime sütunlarında tüm değerler gece yarısıysa (`00:00:00`), sadece tarihe çevirir. Excel'de `2024-01-15 00:00:00` yerine `2024-01-15` görünür
+
+### 6. `artifact_store` — Thread-Safe Köprü
+
+```python
+class ArtifactStore:
+    """Thread-safe storage for artifacts produced by agent tools."""
+    def __init__(self):
+        self._html: list[str] = []
+        self._charts: list[tuple[bytes, str]] = []
+        self._downloads: list[tuple[bytes, str, str]] = []
+        self._lock = threading.Lock()
+
+    def add_html(self, html: str):
+        with self._lock:
+            self._html.append(html)
+
+    def pop_html(self) -> list[str]:
+        with self._lock:
+            items = self._html.copy()
+            self._html.clear()
+            return items
+```
+
+> 💡 **Neden böyle?**
+> LangChain ajanı **ayrı bir thread'de** çalışır. Streamlit UI ise **ana thread'de**. İkisi arasında veri aktarmak için `st.session_state` kullanamazsın — thread-safe değil.
+>
+> `ArtifactStore` bir **global singleton** olarak çalışır:
+> ```
+> Ajan thread:                     Streamlit thread:
+>   execute() → publish_html()
+>     ↓
+>   ArtifactStore.add_html()       (stream bittikten sonra)
+>                                      ↓
+>                                  store.pop_html()
+>                                      → st.components.html()
+> ```
+>
+> `threading.Lock()` aynı anda iki thread'in listeyi değiştirmesini engeller.
+
+```python
+# Global singleton — session_id ile izole
+_stores: dict[str, ArtifactStore] = {}
+_global_lock = threading.Lock()
+
+def get_store(session_id: str = "") -> ArtifactStore:
+    with _global_lock:
+        if session_id not in _stores:
+            _stores[session_id] = ArtifactStore()
+        return _stores[session_id]
+```
+
+Her oturum kendi ArtifactStore'una sahip — farklı kullanıcıların artifact'leri karışmaz.
+
+---
+
+## Adım 6: Ajanın Beyni (`src/agent/graph.py`)
+
+Bu dosya projenin **en karmaşık** ve **en önemli** dosyası. 629 satır. Ajanın nasıl kurulduğunu, güvenlik katmanını ve karar mekanizmasını tanımlıyor.
+
+### `build_agent()` — Ajanı İnşa Etmek
+
+```python
+def build_agent(sandbox_manager, thread_id, uploaded_files, user_query=""):
+    backend = sandbox_manager.get_backend(thread_id)
+    session_id = thread_id
+
+    # 1. Araçları oluştur (factory pattern)
+    parse_tool = make_parse_file_tool(uploaded_files)
+    execute_tool = make_execute_tool(backend, session_id)
+    html_tool = make_generate_html_tool(session_id)
+    viz_tool = make_visualization_tool(backend, session_id)
+    download_tool = make_download_file_tool(backend, session_id)
+    tools = [parse_tool, execute_tool, html_tool, viz_tool, download_tool]
+
+    # 2. Skill sistemini çalıştır → prompt derle
+    active_skills = detect_required_skills(uploaded_files, user_query)
+    system_prompt = compose_system_prompt(
+        BASE_SYSTEM_PROMPT, active_skills, uploaded_files, user_query
+    )
+
+    # 3. Smart interceptor oluştur (closure ile)
+    # ... (aşağıda detaylı)
+
+    # 4. Middleware yığınını kur
+    model = resolve_model("anthropic:claude-sonnet-4-20250514")
+    middleware = [
+        create_summarization_middleware(model, backend),
+        AnthropicPromptCachingMiddleware(...),
+        PatchToolCallsMiddleware(),
+        smart_interceptor,
+    ]
+
+    # 5. Ajanı oluştur
+    agent = create_agent(
+        model=model,
+        tools=tools,
+        system_prompt=system_prompt,
+        middleware=middleware,
+        checkpointer=checkpointer,
+    )
+
+    # 6. Recursion limitini ayarla
+    agent = agent.with_config({"recursion_limit": REACT_MAX_ITERATIONS * 2 + 1})
+    return agent, checkpointer, reset_interceptor_state
+```
+
+### Smart Interceptor — Güvenlik Kalkanı
+
+Smart interceptor, ajanın yaptığı **her tool çağrısını** çalıştırılmadan önce kontrol eden bir middleware. Bir güvenlik görevlisi gibi: "Bu çağrıyı geçirebilir miyim?"
+
+```python
+def smart_interceptor(request):
+    name = request.tool_calls[0]["name"]
+    args = request.tool_calls[0]["args"]
+    tool_call_id = request.tool_calls[0]["id"]
+```
+
+#### Kural 1: Execute Limiti
+
+```python
+    # Dinamik limit: basit sorular → 6, karmaşık → 10
+    if name == "execute":
+        _execute_count += 1
+        if _execute_count > _max_execute:
+            return ToolMessage(
+                content=f"⛔ Execute limit reached ({_max_execute}). "
+                        "Summarize findings and respond to user.",
+                tool_call_id=tool_call_id,
+            )
+```
+
+> 💡 **Neden limit var?**
+> LLM'ler bazen sonsuz döngüye girebilir — küçük bir hatayı düzeltmeye çalışırken aynı kodu tekrar tekrar çalıştırır. Limit bunu önler ve maliyeti kontrol altında tutar.
+
+#### Kural 2: Shell Komutları Engelleme
+
+```python
+    shell_patterns = [
+        r'\bls\b', r'\bfind\b', r'\bcat\b', r'\bhead\b', r'\btail\b',
+        r'\bos\.listdir\b', r'\bglob\.glob\b', r'\bos\.walk\b',
+    ]
+    if name == "execute" and any(re.search(p, cmd) for p in shell_patterns):
+        return ToolMessage(
+            content="⛔ Shell/filesystem commands BLOCKED. "
+                    "File paths are known from parse_file. Use pd.read_excel() directly.",
+            tool_call_id=tool_call_id,
+        )
+```
+
+Ajan `ls`, `find`, `cat` gibi komutlar çalıştırmaya çalışırsa **engellenir**. Dosya yolları `parse_file()`'dan zaten biliniyor — gereksiz dosya sistemi keşfi execute kotasını israf eder.
+
+#### Kural 3: Ağ Erişimi Engelleme
+
+```python
+    network_patterns = [
+        r'\burllib\b', r'\brequests\b', r'\bwget\b', r'\bcurl\b',
+        r'\bhttpx\b', r'\baiohttp\b',
+    ]
+    if any(re.search(p, cmd) for p in network_patterns):
+        return ToolMessage(content="⛔ Network access BLOCKED.", ...)
+```
+
+Sandbox'tan dışarıya ağ erişimi engellidir — veri sızıntısını önler.
+
+#### Kural 4: `pip install` Engelleme
+
+```python
+    if "pip install" in cmd or "pip3 install" in cmd or "subprocess" in cmd:
+        return ToolMessage(
+            content="⛔ Package installation BLOCKED. All packages are pre-installed.",
+            ...
+        )
+```
+
+Zararlı paket kurulumunu önler. İhtiyaç duyulan her şey Docker image'da önceden kurulu.
+
+#### Kural 5: Tekrar `parse_file` Engelleme
+
+```python
+    if name == "parse_file" and _parse_done:
+        return ToolMessage(
+            content="⛔ parse_file already called. Use execute() to work with the data.",
+            ...
+        )
+```
+
+#### Kural 6: Circuit Breaker (Devre Kesici)
+
+```python
+    _MAX_CONSECUTIVE_BLOCKS = 3
+    if name == "execute":
+        if _consecutive_blocks >= _MAX_CONSECUTIVE_BLOCKS:
+            return ToolMessage(
+                content="🛑 CIRCUIT BREAKER: 3 consecutive blocks. "
+                        "STOP trying execute. Inform user of the issue.",
+                ...
+            )
+```
+
+Ajan art arda 3 kez engellendiyse, aynı hatayı yapmaya devam etmek yerine kullanıcıya bilgi vermesi isteniyor.
+
+#### Kural 7: Büyük Sampling Engelleme
+
+```python
+    sampling_limit = 500
+    # .head(1000), .sample(2000), [:5000] gibi kalıpları tespit et
+    if n > sampling_limit:
+        return ToolMessage(
+            content=f"⛔ .head({n}) BLOCKED — remove sampling limit. "
+                    "Use pd.read_excel(path) without limits.",
+            ...
+        )
+```
+
+> 💡 **Neden böyle?**
+> `.head(1000)` veya `nrows=5000` kullanmak verinin bir kısmını atlıyor. Bu projede **tüm veri** işlenmelidir — aksi halde analiz sonuçları yanlış olur.
+
+#### Kural 8: Font Otomatik Düzeltme (Auto-fix)
+
+```python
+    if is_pdf_code:
+        # Arial/Helvetica → DejaVu
+        for bad_font in ("Arial", "Helvetica"):
+            cmd = cmd.replace(f"'{bad_font}'", "'DejaVu'")
+
+        # DejaVu font tanımı yoksa enjekte et
+        if "DejaVu" in cmd and "add_font" not in cmd:
+            font_setup = (
+                "pdf.add_font('DejaVu', '', '/home/sandbox/DejaVuSans.ttf', uni=True)\n"
+                "pdf.add_font('DejaVu', 'B', '/home/sandbox/DejaVuSans-Bold.ttf', uni=True)\n"
+            )
+            cmd = re.sub(r'(pdf\.add_page\(\))', r'\1\n' + font_setup, cmd, count=1)
+```
+
+Bu bir **engelleme değil, düzeltme**. LLM sık sık "Arial" fontu kullanır, ama sandbox'ta Arial yok. Interceptor otomatik olarak DejaVu'ya çeviriyor.
+
+#### Kural 9: Hardcoded Metrik Tespiti
+
+```python
+    # var = 1234567 gibi sabit değerler tespit et
+    hardcoded_vars = re.findall(
+        r'^(\w+)\s*=\s*(\d[\d,]*\.?\d*)\s*(?:#.*)?$', cmd, re.MULTILINE
+    )
+    fabricated = [
+        (var, val) for var, val in hardcoded_vars
+        if not any(sp in var.lower() for sp in safe_patterns)
+        and float(val.replace(',', '')) >= 1000
+    ]
+    if fabricated:
+        return ToolMessage(
+            content=f"⛔ Hardcoded metrics detected: {examples}.\n"
+                    "These values must be COMPUTED from data.",
+            ...
+        )
+```
+
+> 💡 **Neden böyle?**
+> LLM'ler bazen **halüsinasyon** yapar — gerçek veriden hesaplamak yerine, önceki çıktıdan gördüğü sayıları kopyalar. `m = {'total': 4383, 'revenue': 8348208.57}` gibi hardcoded değerler **veri uydurma**dır. Bu kural bunu engelliyor.
+>
+> `safe_patterns` listesi font_size, margin, padding gibi UI sabitlerine izin veriyor.
+
+#### Execute Sonrası Suffix Ekleme
+
+Her başarılı execute'dan sonra, ajana kalan kota ve bir sonraki adım için talimat eklenir:
+
+```python
+    suffix = f"\n\n[Execute {_execute_count}/{_max_execute}, remaining: {remaining}]"
+    if remaining <= 2:
+        suffix += " ⚠️ Last executes — combine analysis+PDF in single script."
+    suffix += "\n💭 Before next step → THOUGHT: [what you observed] → [what you will do] → [why]"
+```
+
+Bu suffix ReAct döngüsünü teşvik ediyor — ajan her execute'dan sonra düşünmeye zorlanıyor.
+
+### Ajan Önbellekleme (Agent Caching)
+
+```python
+def get_or_build_agent(sandbox_manager, thread_id, uploaded_files, user_query=""):
+    file_fingerprint = tuple(
+        (f.name, len(f.getvalue())) for f in (uploaded_files or [])
+    )
+
+    cached = st.session_state.get("_agent_cache")
+    if cached and cached["fingerprint"] == file_fingerprint:
+        return cached["agent"], cached["checkpointer"], cached["reset_fn"]
+
+    # Fingerprint değişti → yeni ajan oluştur
+    agent, checkpointer, reset_fn = build_agent(...)
+    st.session_state["_agent_cache"] = {
+        "fingerprint": file_fingerprint,
+        "agent": agent, ...
+    }
+```
+
+**Fingerprint** = dosya adları + boyutları. Aynı dosyalar yüklüyse ajanı yeniden oluşturmaya gerek yok — skill derleme ve model yapılandırma atlanır.
+
+> 🔑 **Anahtar kavram: `reset_interceptor_state()`**
+> Her yeni kullanıcı mesajından önce `reset_fn()` çağrılır. Bu, interceptor'ın closure'daki sayaçlarını sıfırlar:
+> - `_execute_count = 0`
+> - `_consecutive_blocks = 0`
+> - `_correction_count = 0`
+>
+> Bu olmadan, önceki mesajın execute sayısı yeni mesaja taşınırdı.
+
+---
+
+## Adım 7: Sistem Prompt'u (`src/agent/prompts.py`)
+
+Sistem prompt'u, ajanın **anayasası**. 700 satır uzunluğunda ve ajanın davranışını tamamen şekillendiriyor.
+
+### ReAct Döngüsü
+
+```
+DÜŞÜNCE → EYLEM → GÖZLEM → KARAR → DÜŞÜNCE → ...
+```
+
+ReAct (Reasoning + Acting) bir LLM ajan kalıbıdır. Ajan her adımda:
+
+1. **DÜŞÜNCE (THOUGHT):** "Kullanıcı müşteri başına geliri soruyor. Veriyi okumam gerekiyor."
+2. **EYLEM (ACTION):** `execute(df = pd.read_excel(...))`
+3. **GÖZLEM (OBSERVATION):** "12.453 satır yüklendi, Customer ID ve Revenue sütunları var."
+4. **KARAR (DECISION):** "Veri temiz, şimdi gruplandırma yapabilirim."
+
+> 💡 **Neden ReAct?**
+> Alternatif olan "Plan-and-Execute" kalıbında ajan önce tam bir plan yapar, sonra sırayla uygular. Ama veri analizi **keşif amaçlı** — veriyi görene kadar ne yapacağını bilemezsin. ReAct her adımda gözlemleme ve yön değiştirme imkânı veriyor.
+
+### Temel Kurallar
+
+#### 1. Türkçe Yanıt Zorunluluğu
+
+Prompt Türkçe yazılmış ve ajan Türkçe yanıt vermek zorunda. Ama kod ve teknik terimler İngilizce kalabilir.
+
+#### 2. Schema-First Yaklaşımı
+
+```
+HER ZAMAN parse_file() ile başla. Veriyi okumadan önce yapısını öğren.
+```
+
+Neden? 100MB'lık bir dosyayı okuyup sütun adlarının yanlış olduğunu fark etmek israf. Önce şema bilgisini al, sonra doğru okuma stratejisini belirle.
+
+#### 3. Kernel Güveni (Kernel Trust)
+
+```
+KURAL: Kernel'daki değişkenlere GÜVEN. df, m, summary_df gibi
+önceki execute'larda oluşturulan değişkenler HÂLÂ bellekte.
+Tekrar okuma, tekrar hesaplama YASAK.
+```
+
+Bu kural kalıcı kernel'ın gücünü kullanıyor. `df` bir kez yüklendiyse, sonraki tüm execute'larda kullanılabilir.
+
+#### 4. Hardcoded Veri Yasağı
+
+```
+⛔ YASAK: m = {'total': 4383, 'revenue': 8348208.57}
+✅ DOĞRU: m = {'total': df['ID'].nunique(), 'revenue': (df['Qty'] * df['Price']).sum()}
+```
+
+> 💡 **Neden bu kadar önemli?**
+> LLM bir önceki execute çıktısında "Toplam: 4.383 müşteri" gördüğünde, PDF üretirken bu sayıyı kopyalamak ister. Ama ya veri temizliği sonrası sayı değiştiyse? Ya da LLM yanlış hatırlıyorsa?
+>
+> Her metrik **mutlaka koddan hesaplanmalı** — bu garantinin tek yolu.
+
+#### 5. WeasyPrint PDF Formatı
+
+Prompt'ta PDF üretimi için WeasyPrint kullanılması zorunlu tutulmuş. fpdf2 yerine WeasyPrint tercih edilmesinin nedeni: **Türkçe karakter desteği**. HTML + CSS ile PDF üretmek, font sorunlarını ortadan kaldırıyor.
+
+```python
+# Prompt'taki PDF şablonu:
+html = f'''<!DOCTYPE html>
+<html><head><meta charset="UTF-8">
+<style>body {{ font-family: Arial, sans-serif; margin: 40px; }}</style>
+</head><body>
+<h1>Rapor</h1>
+<div class="metric">Toplam: <span class="value">{m["total"]:,}</span></div>
+</body></html>'''
+
+weasyprint.HTML(string=html).write_pdf('/home/sandbox/rapor.pdf')
+```
+
+#### 6. HTML Dashboard — Chart.js
+
+İnteraktif dashboardlar için Chart.js kullanılıyor. Prompt'ta detaylı HTML/CSS/JS şablonları var — KPI kartları, bar chart, line chart.
+
+**Önemli kural:** Dashboard `execute()` içinde `publish_html()` ile oluşturulmalı — `generate_html()` ile değil. Çünkü `publish_html()` kernel değişkenlerine erişebilir, `generate_html()` erişemez.
+
+---
+
+## Adım 8: Kullanıcı Arayüzü (UI)
+
+### `render_chat()` — Ana Akış (`src/ui/chat.py`)
+
+Bu fonksiyon 200+ satır ve tüm sohbet mantığını barındırıyor. Adım adım:
+
+#### 1. Mesaj Geçmişini Göster
+
+```python
+messages = st.session_state.get("messages", [])
+for i, msg in enumerate(messages):
+    with st.chat_message(role):
+        # Tool çağrı adımlarını göster
+        for step in steps:
+            if step["name"] == "execute":
+                execute_buffer.append(step)  # Execute'ları birleştir
+            else:
+                _render_tool_call(tool_name=step["name"], ...)
+        # Mesaj içeriğini göster
+        if content:
+            st.markdown(content)
+        # Artifact'leri yeniden render et
+        _render_artifacts(html, charts, downloads)
+```
+
+Execute çağrıları **konsolide** ediliyor — 6 ayrı execute yerine tek bir genişletilebilir kutu.
+
+#### 2. Kullanıcı Girdisi
+
+```python
+user_query = st.chat_input("Ask a question about your data...")
+if not user_query:
+    return  # Mesaj yoksa hiçbir şey yapma
+```
+
+#### 3. Ajan Oluşturma ve Sandbox Bekleme
+
+```python
+agent, checkpointer, reset_fn = get_or_build_agent(
+    sandbox_manager, session_id, uploaded_files, user_query
+)
+
+with st.spinner("⏳ Sandbox hazırlanıyor..."):
+    ready = sandbox_manager.wait_until_ready(timeout=180)
+```
+
+Pre-warming sayesinde genellikle bekleme olmaz. Ama ilk kez sandbox oluşturuluyorsa 180 saniyeye kadar bekler.
+
+#### 4. Dosyaları Sandbox'a Yükle
+
+```python
+if uploaded_files and uploaded_fingerprint != st.session_state.get("_files_uploaded"):
+    sandbox_manager.upload_files(uploaded_files)
+    st.session_state["_files_uploaded"] = uploaded_fingerprint
+```
+
+Fingerprint karşılaştırması sayesinde aynı dosyalar tekrar yüklenmez.
+
+#### 5. Interceptor Sıfırlama
+
+```python
+reset_fn()  # _execute_count = 0, _consecutive_blocks = 0, ...
+```
+
+#### 6. Ajan Stream'i
+
+```python
+with st.chat_message("assistant"):
+    for chunk in agent.stream(
+        {"messages": [{"role": "user", "content": user_query}]},
+        config={"configurable": {"thread_id": session_id}},
+        stream_mode="updates",
+    ):
+        _process_stream_chunk(chunk, rendered_ids, exec_manager)
+```
+
+`stream_mode="updates"` sayesinde her LangGraph node çıktısı gerçek zamanlı olarak gelir. `_process_stream_chunk` bu chunk'ları render eder:
+
+- **AI mesajı + tool call:** Tool kartı göster (ikon, isim, girdi)
+- **Tool mesajı (çıktı):** Çıktıyı kartta göster (hata varsa kırmızı)
+- **AI mesajı (son yanıt):** Markdown olarak göster
+
+#### 7. Artifact Render
+
+```python
+# Stream bittikten sonra artifact'leri topla
+_store = get_store(session_id)
+collected_html = _store.pop_html()
+collected_charts = _store.pop_charts()
+collected_downloads = _store.pop_downloads()
+
+_render_artifacts(collected_html, collected_charts, collected_downloads)
+```
+
+Artifact'ler stream bittikten sonra render edilir — stream sırasında render etmek Streamlit'in güncelleme mekanizmasıyla çakışır.
+
+#### 8. Auto Learn
+
+```python
+threading.Thread(
+    target=auto_learn,
+    kwargs={
+        "user_query": user_query,
+        "agent_final_response": full_response,
+        "collected_steps": collected_steps,
+        "uploaded_files": uploaded_files,
+    },
+    daemon=True,
+).start()
+```
+
+Arka planda çıktı kalitesini değerlendirir ve gerekirse SKILL.md'yi günceller.
+
+### ExecuteStatusManager — Gerçek Zamanlı Durum
+
+```python
+class ExecuteStatusManager:
+    """Manages a single consolidated container for execute steps."""
+```
+
+Birden fazla execute çağrısı olduğunda, her birini ayrı göstermek yerine tek bir kutu içinde gösteriyor:
+
+```
+🐍 Running code...
+  ├── ✅ Execute 1/6 — Data loaded
+  ├── ✅ Execute 2/6 — Analysis complete
+  ├── 🔄 Execute 3/6 — Generating PDF...
+  └── ⏳ Execute 4-6 pending
+```
+
+### Sidebar — `components.py`
+
+```python
+def render_sidebar():
+    with st.sidebar:
+        # 1. Dosya yükleme widget'ı
+        uploaded = st.file_uploader(
+            "Upload files",
+            type=["csv", "xlsx", "xls", "xlsm", "json", "pdf", "tsv"],
+            accept_multiple_files=True,
+        )
+
+        # 2. Yüklenen dosya listesi (ikon + boyut + indirme butonu)
+        for f in files:
+            icon = _get_file_icon(f.name)  # .xlsx → 📗, .csv → 📊
+            size = _format_size(f.size)     # 1234567 → "1.2 MB"
+
+        # 3. "Yeni Konuşma" butonu
+        if st.button("🔄 New Conversation"):
+            reset_session()
+            st.rerun()
+
+        # 4. Konuşma geçmişi
+        conversations = list_conversations(user_id)
+        for conv in past:
+            if st.button(label):
+                msgs = load_messages(conv["session_id"])
+                st.session_state["messages"] = msgs
+```
+
+### CSS Stilleri — `styles.py`
+
+413 satır CSS. Önemli öğeler:
+
+- **Tool kartları:** Rounded border, ikon header, koyu çıktı kutusu
+- **Execute animasyonu:** `pulse-glow` — mavi nokta nabız gibi atıyor
+- **Sidebar:** Koyu arka plan (`#1e293b`), açık metin renkleri
+- **Dosya rozeti:** Mavi arka plan, küçük font, ikon + boyut
+- **Hata stili:** Kırmızı kenarlık, pembe arka plan
+
+```css
+.exec-active-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #0ea5e9;
+    animation: pulse-glow 1.5s ease-in-out infinite;
+}
+```
+
+### Araç İkonları
+
+```python
+TOOL_ICONS = {
+    "parse_file": "📄",
+    "execute": "🐍",
+    "generate_html": "🌐",
+    "create_visualization": "📊",
+    "download_file": "📥",
+}
+```
+
+---
+
+## Adım 9: Veritabanı (`src/storage/db.py`)
+
+### Veritabanı Seçimi
+
+```python
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
+
+if DATABASE_URL:
+    # PostgreSQL — production ortamı
+    _engine = create_engine(DATABASE_URL)
+else:
+    # SQLite — yerel geliştirme
+    db_path = os.path.join(DATA_DIR, "conversations.db")
+    _engine = create_engine(f"sqlite:///{db_path}")
+```
+
+`DATABASE_URL` varsa PostgreSQL, yoksa SQLite. Geliştirme sırasında SQLite yeterli.
+
+### Tablo Yapısı
+
+```sql
+-- Konuşmalar
+CREATE TABLE conversations (
+    session_id  TEXT PRIMARY KEY,
+    user_id     TEXT NOT NULL,
+    title       TEXT DEFAULT '',
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Mesajlar
+CREATE TABLE messages (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id  TEXT NOT NULL,
+    role        TEXT NOT NULL,           -- 'user' veya 'assistant'
+    content     TEXT DEFAULT '',
+    steps       TEXT DEFAULT '[]',       -- JSON: tool çağrıları
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Dosyalar
+CREATE TABLE files (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id  TEXT NOT NULL,
+    name        TEXT NOT NULL,
+    size        INTEGER NOT NULL,
+    data        BLOB NOT NULL,          -- Dosya içeriği (binary)
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+### Temel İşlemler
+
+```python
+def save_message(session_id, role, content, steps=None):
+    """Mesajı veritabanına kaydet."""
+    # steps JSON olarak saklanıyor: [{"name": "execute", "input": {...}, "output": "..."}]
+
+def load_messages(session_id) -> list[dict]:
+    """Bir konuşmanın tüm mesajlarını yükle."""
+
+def save_files(session_id, uploaded_files):
+    """Yüklenen dosyaları veritabanına kaydet (binary BLOB)."""
+
+def load_files(session_id) -> list[dict]:
+    """Bir konuşmanın dosyalarını yükle → MockUploadedFile ile sarmal."""
+
+def delete_conversation(session_id):
+    """Konuşmayı ve ilişkili mesaj/dosyaları sil."""
+
+def list_conversations(user_id) -> list[dict]:
+    """Kullanıcının tüm konuşmalarını listele (son güncellenen önce)."""
+```
+
+> 💡 **Neden dosyalar da DB'de?**
+> Dosyalar BLOB olarak veritabanında saklanıyor. Alternatif: dosya sisteminde saklamak. Ama DB'de saklamanın avantajı: konuşma silinince dosyalar da otomatik silinir, ve konuşma yüklenirken dosyalar da birlikte gelir. Tek kaynak (single source of truth).
+
+> 🧪 **Kendin dene:**
+> Uygulamayı çalıştır, bir dosya yükleyip soru sor. Sonra `data/conversations.db` dosyasını bir SQLite istemcisiyle aç:
+> ```bash
+> sqlite3 data/conversations.db
+> .tables
+> SELECT session_id, title FROM conversations;
+> SELECT role, substr(content, 1, 50) FROM messages WHERE session_id='...';
+> ```
+
+---
+
+## Adım 10: Tüm Akış Birlikte (End-to-End)
+
+Şimdi her şeyi birleştirelim. Kullanıcı bir Excel dosyası yükleyip "Bu veriyi analiz et, PDF rapor ver" dediğinde **tam olarak ne oluyor?**
+
+### Senaryo
+
+1. Kullanıcı tarayıcıyı açıyor: `http://localhost:8501`
+2. `sales_data.xlsx` dosyasını yüklüyor (25MB, tek sayfa, 50.000 satır)
+3. Chat'e yazıyor: *"Müşteri başına ortalama sipariş tutarını hesapla. PDF rapor ver."*
+
+### Akış
+
+```
+Zaman   Bileşen            Ne Oluyor
+──────  ─────────────────  ────────────────────────────────────────
+t=0     app.py              Sayfa yükleniyor, init_session() çalışıyor
+t=0.1   session.py          Sandbox ön-ısıtma thread'i başlatılıyor
+t=0.5   manager.py          Docker container oluşturuluyor (arka plan)
+t=3     manager.py          ✅ Sandbox hazır, CodeInterpreter kernel oluşturuldu
+t=5     components.py       Kullanıcı sales_data.xlsx'i sürükleyip bırakıyor
+t=5.1   session_state       uploaded_files = [sales_data.xlsx]
+t=8     chat.py             Kullanıcı mesajını yazıyor ve Enter'a basıyor
+│
+│  ┌─── render_chat() başlıyor ───────────────────────────────────
+│  │
+t=8.1   graph.py            get_or_build_agent() → yeni ajan oluştur
+t=8.2   registry.py         detect_required_skills() → ["xlsx"]
+t=8.3   loader.py           compose_system_prompt():
+│  │                          BASE_PROMPT + xlsx/SKILL.md
+│  │                          (25MB < 40MB, large_files.md yüklenmedi)
+t=8.5   graph.py            build_agent() → araçlar + interceptor + middleware
+t=8.6   manager.py          wait_until_ready() → zaten hazır ✅
+t=8.7   manager.py          upload_files() → sales_data.xlsx → /home/sandbox/
+t=8.8   graph.py            reset_interceptor_state() → sayaçlar sıfırlandı
+│  │
+│  │  ┌─── agent.stream() başlıyor ──────────────────────────────
+│  │  │
+t=9     Claude Sonnet       DÜŞÜNCE: "Dosya yüklendi, şemasını öğrenmeliyim."
+t=9.1   Claude              EYLEM: parse_file("sales_data.xlsx")
+t=9.2   interceptor         ✅ parse_file izinli (ilk çağrı)
+t=9.3   file_parser.py      Yerel parse: 50.000 satır, sütunlar: [OrderID, CustomerID,
+│  │  │                      Date, Product, Quantity, Price]
+t=9.5   Claude              GÖZLEM: Schema alındı. 50K satır. Tarih formatı: %m/%d/%Y
+t=9.6   Claude              KARAR: "Pandas ile okuyabilirim (25MB < 40MB)"
+│  │  │
+t=10    Claude              DÜŞÜNCE: "Veriyi okuyup temizlemeliyim."
+t=10.1  Claude              EYLEM: execute("""
+│  │  │                        import pandas as pd
+│  │  │                        df = pd.read_excel('/home/sandbox/sales_data.xlsx')
+│  │  │                        df = df.dropna(subset=['CustomerID'])
+│  │  │                        df['Date'] = pd.to_datetime(df['Date'], format='%m/%d/%Y')
+│  │  │                        print(f'✅ {len(df):,} satır yüklendi')
+│  │  │                      """)
+t=10.2  interceptor         ✅ execute #1 izinli, shell/network kalıbı yok
+t=10.3  sandbox             Python çalıştır → "✅ 48.721 satır yüklendi"
+t=10.5  interceptor         Suffix ekle: "[Execute 1/8, remaining: 7]"
+│  │  │
+t=11    Claude              GÖZLEM: 48.721 satır temiz veri.
+t=11.1  Claude              DÜŞÜNCE: "Müşteri başına sipariş tutarını hesaplamalıyım."
+t=11.2  Claude              EYLEM: execute("""
+│  │  │                        # df kernel'da hâlâ var!
+│  │  │                        df['OrderTotal'] = df['Quantity'] * df['Price']
+│  │  │                        customer_stats = df.groupby('CustomerID')['OrderTotal'].agg(
+│  │  │                            ['sum', 'count', 'mean']
+│  │  │                        )
+│  │  │                        m = {
+│  │  │                            'total_customers': df['CustomerID'].nunique(),
+│  │  │                            'avg_order': customer_stats['mean'].mean(),
+│  │  │                            'total_revenue': df['OrderTotal'].sum(),
+│  │  │                        }
+│  │  │                        print(f'Metriklerin key listesi: {list(m.keys())}')
+│  │  │                        print('✅ Doğrulama OK')
+│  │  │                      """)
+t=11.3  interceptor         ✅ execute #2 izinli, hardcoded metrik yok
+t=11.5  sandbox             → "Metriklerin key listesi: ['total_customers', 'avg_order', ...]"
+│  │  │
+t=12    Claude              GÖZLEM: Metrikler hesaplandı. ✅ Doğrulama OK.
+t=12.1  Claude              DÜŞÜNCE: "PDF rapor oluşturmalıyım. m dict ve df kernel'da."
+t=12.2  Claude              EYLEM: execute("""
+│  │  │                        import weasyprint, os
+│  │  │                        html = f'''<!DOCTYPE html>...
+│  │  │                          <div>Müşteri Sayısı: {m['total_customers']:,}</div>
+│  │  │                          <div>Ortalama Sipariş: {m['avg_order']:,.2f}</div>
+│  │  │                        ...'''
+│  │  │                        weasyprint.HTML(string=html).write_pdf('/home/sandbox/rapor.pdf')
+│  │  │                        assert os.path.exists('/home/sandbox/rapor.pdf')
+│  │  │                        print(f'✅ PDF: {os.path.getsize(...)} KB')
+│  │  │                      """)
+t=12.3  interceptor         ✅ execute #3 izinli
+t=12.5  sandbox             → "✅ PDF: 28 KB"
+│  │  │
+t=13    Claude              EYLEM: download_file('/home/sandbox/rapor.pdf')
+t=13.1  download_file.py    Sandbox'tan PDF indir → ArtifactStore'a ekle
+│  │  │
+t=14    Claude              EYLEM: execute("""  # Dashboard oluştur
+│  │  │                        # m ve customer_stats hâlâ kernel'da!
+│  │  │                        labels = customer_stats.index[:10].tolist()
+│  │  │                        values = customer_stats['sum'][:10].tolist()
+│  │  │                        html = f'''<html>...Chart.js...
+│  │  │                          const labels = {labels};
+│  │  │                          const data = {values};
+│  │  │                        ...'''
+│  │  │                        publish_html(html)
+│  │  │                      """)
+t=14.1  interceptor         ✅ execute #4 izinli
+t=14.3  sandbox             → "✅ HTML artifact: artifact_0.html"
+t=14.4  execute.py          publish_html tespiti → artifact dosyasını indir
+│  │  │                      → ArtifactStore.add_html()
+│  │  │
+t=15    Claude              Son yanıt: "Analiz tamamlandı. Müşteri verileriniz
+│  │  │                      incelendi ve PDF rapor hazırlandı..."
+│  │  │
+│  │  └─── agent.stream() bitti ──────────────────────────────────
+│  │
+t=15.1  chat.py             exec_manager.finalize() → execute kutusunu kapat
+t=15.2  artifact_store      pop_html() → HTML dashboard
+│  │                        pop_downloads() → PDF dosyası
+t=15.3  chat.py             st.components.html(dashboard)  → iframe render
+│  │                        st.download_button("rapor.pdf") → indirme butonu
+t=15.5  db.py               save_message() → asistan yanıtını kaydet
+t=15.6  learner.py          auto_learn() başlat (arka plan thread)
+│  │
+│  └─── render_chat() bitti ──────────────────────────────────────
+│
+t=16    Kullanıcı           PDF'i indiriyor, dashboard'u inceliyor ✨
+```
+
+### Sequence Diagram (ASCII)
+
+```
+Kullanıcı    Streamlit UI    Agent(Claude)    Interceptor    Sandbox
+    │              │               │               │            │
+    │──upload──────▶│               │               │            │
+    │              │──prewarm──────────────────────────────────▶│
+    │              │               │               │      create container
+    │              │               │               │            │
+    │──"analiz et"─▶│               │               │            │
+    │              │──build_agent──▶│               │            │
+    │              │  (skills,tools)│               │            │
+    │              │──upload_files──────────────────────────────▶│
+    │              │──reset_fn()───────────────────▶│            │
+    │              │──stream()─────▶│               │            │
+    │              │               │               │            │
+    │              │               │──parse_file──▶│──check──▶  │
+    │              │               │◀──schema───── │            │
+    │              │               │               │            │
+    │              │               │──execute #1──▶│──check──▶  │
+    │              │               │               │──run──────▶│
+    │              │◀──status──────│◀──output──────│◀───────────│
+    │              │               │               │            │
+    │              │               │──execute #2──▶│──check──▶  │
+    │              │               │               │──run──────▶│
+    │              │◀──status──────│◀──output──────│◀───────────│
+    │              │               │               │            │
+    │              │               │──execute #3──▶│──check──▶  │
+    │              │               │  (PDF üretim) │──run──────▶│
+    │              │◀──status──────│◀──output──────│◀───────────│
+    │              │               │               │            │
+    │              │               │──download_file─────────────▶│
+    │              │◀──artifact────│◀──PDF bytes───│◀───────────│
+    │              │               │               │            │
+    │              │               │──execute #4──▶│──check──▶  │
+    │              │               │  (dashboard)  │──run──────▶│
+    │              │◀──artifact────│◀──HTML────────│◀───────────│
+    │              │               │               │            │
+    │              │◀──son yanıt───│               │            │
+    │              │               │               │            │
+    │◀──render─────│  (iframe + download button)   │            │
+    │              │──auto_learn (arka plan)───────▶│            │
+    │              │               │               │            │
+```
+
+---
+
+## Bonus: Projeyi Geliştirmek İstersen
+
+### 1. Yeni Skill Ekleme
+
+Diyelim ki `.parquet` dosyalarını da desteklemek istiyorsun.
+
+**Adım 1:** `skills/parquet/SKILL.md` oluştur:
+
+```markdown
+---
+name: parquet
+description: "Use when working with .parquet files, Apache Parquet format, columnar storage"
+---
+
+# Parquet Processing Expertise
+
+## Reading Parquet Files
+\```python
+import pandas as pd
+df = pd.read_parquet('/home/sandbox/data.parquet')
+print(f"Shape: {df.shape}")
+\```
+
+## DuckDB with Parquet (Large Files)
+\```python
+import duckdb
+result = duckdb.sql("""
+    SELECT * FROM read_parquet('/home/sandbox/data.parquet')
+""").df()
+\```
+```
+
+**Adım 2:** `src/skills/registry.py`'ye trigger ekle:
+
+```python
+SkillTrigger(
+    name="parquet",
+    extensions=[".parquet"],
+    keywords=["parquet", "columnar"],
+),
+```
+
+**Adım 3:** `src/tools/file_parser.py`'ye parser ekle:
+
+```python
+def _parse_parquet(file_bytes: bytes, filename: str) -> dict[str, Any]:
+    import pandas as pd
+    df = pd.read_parquet(io.BytesIO(file_bytes))
+    return {
+        "type": "parquet",
+        "filename": filename,
+        "columns": list(df.columns),
+        "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()},
+        "total_rows": len(df),
+        "preview": df.head(10).to_string(),
+    }
+
+PARSERS[".parquet"] = _parse_parquet
+```
+
+**Adım 4:** `src/ui/components.py`'de dosya tipi ekle:
+
+```python
+FILE_TYPE_ICONS[".parquet"] = "🔶"
+# Ve file_uploader'ın type listesine "parquet" ekle
+```
+
+### 2. Yeni Araç Ekleme
+
+Diyelim ki bir `export_to_google_sheets` aracı eklemek istiyorsun.
+
+**Adım 1:** `src/tools/google_sheets.py` oluştur:
+
+```python
+from langchain_core.tools import tool
+
+def make_google_sheets_tool(session_id: str = ""):
+    @tool
+    def export_to_google_sheets(data_json: str, sheet_name: str) -> str:
+        """Export analysis results to Google Sheets."""
+        # ... Google Sheets API entegrasyonu
+        return f"✅ Data exported to Google Sheets: {sheet_name}"
+    return export_to_google_sheets
+```
+
+**Adım 2:** `src/agent/graph.py`'de `build_agent()` fonksiyonuna ekle:
+
+```python
+sheets_tool = make_google_sheets_tool(session_id)
+tools = [parse_tool, execute_tool, html_tool, viz_tool, download_tool, sheets_tool]
+```
+
+**Adım 3:** `src/ui/styles.py`'de ikon ve etiket ekle:
+
+```python
+TOOL_ICONS["export_to_google_sheets"] = "📊"
+TOOL_LABELS["export_to_google_sheets"] = "Exporting to Google Sheets"
+```
+
+### 3. Yeni Interceptor Kuralı Ekleme
+
+Diyelim ki `time.sleep()` çağrılarını engellemek istiyorsun (sandbox'ı meşgul etmeyi önlemek için).
+
+`src/agent/graph.py`'deki `smart_interceptor` fonksiyonuna ekle:
+
+```python
+    # Block time.sleep() calls
+    if name == "execute" and "time.sleep" in cmd:
+        _execute_count -= 1  # Kotadan düşme
+        return ToolMessage(
+            content="⛔ time.sleep() BLOCKED — sandbox resources are limited. "
+                    "Remove sleep calls and use direct execution.",
+            tool_call_id=tool_call_id,
+        )
+```
+
+**Nereye ekleyeceğini** bilmek önemli: `if name == "execute":` bloğunun içinde, ama `handler(request)` çağrısından **önce**. Çünkü interceptor'ın amacı çalıştırmadan önce kontrol etmek.
+
+**Test:** Ajan `time.sleep(10)` çağırmaya çalıştığında engellenir ve kota tüketilmez.
+
+---
+
+## 🎓 Sonuç
+
+Bu tutorial boyunca şunları öğrendin:
+
+1. **Projenin ne yaptığını** ve teknoloji yığınını
+2. **app.py'den** uygulamanın nasıl başladığını
+3. **Session state** ile Streamlit'te durumun nasıl korunduğunu
+4. **Sandbox sisteminin** Docker ile nasıl izolasyon sağladığını
+5. **Kalıcı kernel** kavramını ve neden devrim niteliğinde olduğunu
+6. **Skill sisteminin** progressive disclosure ile nasıl çalıştığını
+7. **Araçların** factory pattern ile nasıl oluşturulduğunu
+8. **Smart interceptor'ın** güvenlik ve kalite nasıl sağladığını
+9. **Sistem prompt'unun** ajanın davranışını nasıl şekillendirdiğini
+10. **UI katmanının** stream, artifact ve geçmiş yönetimini
+11. **Veritabanının** konuşma ve dosya persistansını
+12. **Tüm akışın** uçtan uca nasıl çalıştığını
+
+Bu proje, modern AI mühendisliğinin birçok ileri kalıbını bir araya getiriyor:
+- **ReAct ajanlar** (düşün → yap → gözlemle)
+- **Sandbox izolasyonu** (güvenli kod çalıştırma)
+- **Progressive disclosure** (bilgi yükünü azalt)
+- **LLM-as-judge** (otomatik kalite değerlendirme)
+- **Self-improving skills** (otomatik öğrenme)
+
+Artık sadece **kullanıcı** değil, bir **geliştirici** olarak bu projeye katkı sağlayabilirsin. 🚀
+
+---
+
+> 📝 **Bu belge** CYBki/code-execution-agent deposu için hazırlanmıştır.
+> Her adım, gerçek kaynak koduna dayanarak yazılmıştır.
