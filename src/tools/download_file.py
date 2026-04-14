@@ -76,7 +76,9 @@ def make_download_file_tool(backend: OpenSandboxBackend, session_id: str = ""):
             file_path: Absolute path to the file in the sandbox, e.g. '/home/sandbox/report.pdf'
         """
         ALLOWED_PREFIX = SANDBOX_HOME + "/"
-        if not file_path.startswith(ALLOWED_PREFIX):
+        # Resolve symlinks and '..' to prevent path traversal attacks
+        resolved = os.path.realpath(file_path)
+        if not resolved.startswith(os.path.realpath(SANDBOX_HOME) + "/"):
             return f"❌ Only files under {ALLOWED_PREFIX} can be downloaded."
 
         filename = os.path.basename(file_path)

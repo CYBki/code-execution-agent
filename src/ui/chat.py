@@ -576,7 +576,7 @@ def render_chat():
         )
     except Exception as e:
         logger.error("Agent build failed: %s", e, exc_info=True)
-        st.error(f"Agent oluşturulamadı: {e}")
+        st.error("Agent oluşturulamadı. Lütfen sayfayı yenileyip tekrar deneyin.")
         return
 
     # Block until OpenSandbox is ready (prevents race condition)
@@ -602,7 +602,7 @@ def render_chat():
                 save_files(_sid, uploaded_files)
         except Exception as e:
             logger.error("Failed to upload files to sandbox: %s", e, exc_info=True)
-            st.warning(f"⚠️ Dosya yüklenemedi: {e}")
+            st.warning("⚠️ Dosya yüklenemedi. Lütfen tekrar deneyin veya 'Yeni Konuşma' ile oturumu sıfırlayın.")
             return
 
     # Reset interceptor counters for new conversation turn
@@ -676,8 +676,9 @@ def render_chat():
             )
         except Exception as e:
             exec_manager.finalize()  # Close execute container before showing error
-            st.error(f"Agent hatası: {e}")
-            full_response = f"Bir hata oluştu: {e}"
+            logger.error("Agent stream error: %s", e, exc_info=True)
+            st.error("Beklenmeyen bir hata oluştu. Lütfen tekrar deneyin.")
+            full_response = "Bir hata oluştu. Lütfen tekrar deneyin veya 'Yeni Konuşma' ile oturumu sıfırlayın."
 
         # Collect all artifacts that accumulated during streaming
         _store = get_store(session_id)
