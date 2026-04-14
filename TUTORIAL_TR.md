@@ -2727,6 +2727,247 @@ max_sandboxes = 24       # 12 → 24
 
 ---
 
+## Adım 17: Bellek Yönetimi — Sessiz Ama Kritik Savunma
+
+Bu proje üç farklı bellek alanını yönetiyor. Her birinde taşma riski var ve her biri için farklı mekanizmalar devreye giriyor.
+
+### 🔑 Üç Bellek Alanı
+
+```
+┌───────────────────────────────────────────────────────────────┐
+│  1. Sandbox Container (Docker)                                │
+│     → Python kernel, DataFrame'ler, matplotlib figürleri      │
+│     → En tehlikeli alan: kullanıcı dosya boyutunu kontrol      │
+│       edemiyoruz                                              │
+│                                                               │
+│  2. Streamlit Sunucu (Ana süreç)                              │
+│     → session_state, artifact_store, DB bağlantıları          │
+│     → İndirilen dosyalar geçici olarak burada tutuluyor       │
+│                                                               │
+│  3. Disk                                                      │
+│     → Log dosyaları, sandbox geçici dosyaları, veritabanı     │
+│     → Disk dolması = her şey çöker                            │
+└───────────────────────────────────────────────────────────────┘
+```
+
+### Alan 1: Sandbox Container Belleği
+
+#### pandas Bellek Çarpanı ve DuckDB
+
+pandas bir Excel dosyası okurken, dosya boyutunun **3-5 katı** RAM kullanır:
+
+| Dosya Boyutu | pandas RAM Kullanımı | Container Limiti (2GB) |
+|-------------|---------------------|----------------------|
+| 10MB        | ~30-50MB            | %2 — güvenli |
+| 40MB        | ~120-200MB          | %10 — sınırda |
+| 80MB        | ~240-400MB          | %20 — riskli |
+| 200MB       | ~600MB-1GB          | %50 — çökme riski |
+
+**Neden 3-5x?** Her hücre ayrı Python nesnesi olur (string, int, datetime). 10.000 satır × 20 sütun = 200.000 Python nesnesi, her biri ~100-500 byte overhead.
+
+Bu yüzden `parse_file()` dosya boyutunu kontrol eder ve ≥40MB'de uyarı verir:
+
+```python
+# file_parser.py — büyük dosya tespiti
+if size_mb >= 40:
+    output += "⚠️ BÜYÜK DOSYA — DUCKDB STRATEJİSİ ZORUNLU"
+```
+
+**DuckDB farkı:** pandas tüm dosyayı RAM'e yükler, DuckDB sadece sorguya gereken sütunları/satırları okur:
+
+```python
+# Yanlış — 40MB dosya → ~150MB RAM:
+df = pd.read_excel(path)
+result = df.groupby('City')['Revenue'].sum()
+
+# Doğru — 40MB dosya → ~10MB RAM:
+df = pd.read_excel(path)
+df.to_csv('/home/sandbox/temp.csv', index=False)
+del df  # ← 150MB serbest bırakıldı!
+result = duckdb.sql("SELECT City, SUM(Revenue) FROM read_csv_auto('temp.csv') GROUP BY City").df()
+```
+
+> 💡 **`del df` neden kritik?** CSV'ye yazdıktan sonra DataFrame'e artık ihtiyacın yok. `del` olmadan pandas bellekte tutmaya devam eder — DuckDB'nin kullanacağı belleğe ek olarak. İki kopya yerine sıfır kopya.
+
+#### `read_only=True` — openpyxl Bellek Tasarrufu
+
+```python
+# file_parser.py — schema okurken
+wb = load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
+```
+
+`read_only=True` bellek kullanımını **%60-70** azaltır:
+- Hücre nesnelerini lazy oluşturur (talep edildikçe)
+- Style/font/border bilgisi yüklenmez
+- Bize sadece `number_format` lazım — geri kalan gereksiz
+
+> 💡 `download_file.py`'de `read_only=True` **kullanılamaz** çünkü orada hücre değerlerini değiştiriyoruz (datetime → date dönüşümü).
+
+#### `plt.close('all')` — Grafik Bellek Sızıntısını Önleme
+
+```python
+# visualization.py — her grafik kodunun sonuna otomatik eklenir
+wrapped_code = code + "\nimport matplotlib; matplotlib.pyplot.close('all')"
+```
+
+matplotlib figürleri bellekte kalır ve **otomatik silinmez**. 10 grafik × ~5MB = 50MB birikir.
+
+**Neden biz ekliyoruz, ajan yazmıyor?** LLM'ler temizlik kodunu sıklıkla unutur. Kodu sarmalayarak garanti altına alıyoruz — ajan farkında bile olmadan bellek temizleniyor.
+
+**Neden `plt.close('all')` ve sadece `plt.close()` değil?**
+- `plt.close()` → sadece aktif figürü kapatır
+- `plt.close('all')` → **tüm** figürleri kapatır (kapanmamış eski figürler dahil)
+
+#### Kernel Reset — Timeout Sonrası Bellek Kurtarma
+
+```python
+# manager.py — timeout olduğunda
+def _reset_context(self):
+    self._interpreter.codes.delete_context(old_id)  # Eski kernel'ın TÜM değişkenlerini sil
+    self._py_context = self._interpreter.codes.create_context(SupportedLanguage.PYTHON)
+```
+
+Timeout olan bir kodun bellekte tuttuğu **her şeyi** temizler. 200MB'lık DataFrame timeout olduysa, `delete_context()` ile tüm namespace serbest bırakılır.
+
+#### `clean_workspace()` — Yeni Konuşma = Temiz Bellek
+
+```python
+# manager.py — "Yeni Konuşma" butonunda
+def clean_workspace(self):
+    self._backend.execute("rm -rf /home/sandbox/* 2>/dev/null")      # Disk temizliği
+    self._interpreter.codes.delete_context(self._py_context.id)       # Bellek temizliği
+    self._py_context = self._interpreter.codes.create_context(...)    # Temiz kernel
+```
+
+Önceki analizin 500MB DataFrame'i tamamen temizlenir. Container **yeniden oluşturulmaz** (5 saniye tasarruf) — sadece bellek ve dosyalar sıfırlanır.
+
+### Alan 2: Streamlit Sunucu Belleği
+
+#### Execute Çıktı Kırpma — `MAX_OUTPUT = 50_000`
+
+```python
+# execute.py
+MAX_OUTPUT = 50_000
+if output and len(output) > MAX_OUTPUT:
+    output = output[:MAX_OUTPUT] + f"\n... [truncated, {len(output)} total chars]"
+```
+
+`print(df)` ile 50.000 satırlık DataFrame yazdırılırsa = 5MB string.
+Bu string → LangChain ToolMessage → Claude API → context window.
+
+50K karakter limiti:
+- Yeterince büyük: `df.describe()`, hata mesajları, normal çıktılar sığar
+- Yeterince küçük: tüm DataFrame dump'ı engellenir
+- Claude'un context window'unu korur (200K token'ın ~%7'si)
+
+#### Dosya İndirme Limiti — `MAX_DOWNLOAD_MB = 50`
+
+```python
+# download_file.py
+MAX_DOWNLOAD_MB = 50
+if len(resp.content) > MAX_DOWNLOAD_MB * 1024 * 1024:
+    return f"❌ File too large"
+```
+
+İndirilen dosya sunucu RAM'ine yüklenir. 50MB limit olmadan, 200MB CSV dump sunucuyu zorlayabilir.
+
+#### ArtifactStore Pop Pattern — Tüket ve Temizle
+
+```python
+# artifact_store.py
+def pop_html(self):
+    with self._lock:
+        items = self._html_items[:]   # Kopyala
+        self._html_items.clear()       # Orijinali temizle → bellek serbest
+    return items[-1] if items else None
+```
+
+Her `generate_html()` çağrısı HTML string'i biriktirir. `pop` pattern'i ile:
+1. UI thread artifact'ı alır
+2. Store temizlenir → bellek serbest
+3. Eğer `get` (temizlemeden okuma) kullansak → oturum boyunca birikir
+
+#### Skill Cache Sınırı — `lru_cache(maxsize=32)`
+
+```python
+# loader.py
+@lru_cache(maxsize=32)
+def load_skill(skill_path: str) -> Optional[str]:
+```
+
+~10 skill dosyası var → 32 fazlasıyla yeter. `maxsize=None` (sınırsız) kullansak ve bir bug farklı path'ler üretse → cache sonsuz büyür. `maxsize=32` bunu önler.
+
+### Alan 3: Disk Bellek Yönetimi
+
+#### RotatingFileHandler — Log Dosyası Rotasyonu
+
+```python
+# logging_config.py — her 3 log dosyası için aynı ayar
+RotatingFileHandler(
+    "app.log",
+    maxBytes=10 * 1024 * 1024,    # 10MB
+    backupCount=5,                 # En fazla 5 yedek
+)
+```
+
+Nasıl çalışır: `app.log` 10MB dolunca → `app.log.1` → `app.log.2` → ... → `app.log.5` silinir.
+
+**Toplam disk:** 3 dosya × (10MB + 5×10MB) = **180MB maximum** → disk dolması önlenir.
+
+### Alan 4: Thread ve Process Belleği
+
+#### `shutdown(wait=False)` — ThreadPoolExecutor Temizliği
+
+```python
+# manager.py — her execute() çağrısında
+pool = ThreadPoolExecutor(max_workers=1)
+future = pool.submit(...)
+try:
+    result = future.result(timeout=180)
+except TimeoutError:
+    pool.shutdown(wait=False)   # ← wait=True olursa SONSUZ BEKLEMEye girer!
+    self._reset_context()
+```
+
+Her execute'da yeni pool oluşturulur (~1MB). `shutdown(wait=False)` ile hemen temizlenir. `wait=True` kullanılırsa, takılmış thread bitene kadar bekler — ama thread zaten timeout olmuş, bitmeyecek!
+
+#### `wb.close()` — Workbook Kapatma
+
+```python
+# download_file.py ve file_parser.py'de
+wb.close()  # XML parser cache'leri + hücre nesneleri serbest bırakılır
+```
+
+openpyxl Workbook kapatılmazsa, dahili XML parser cache'leri ve hücre referansları garbage collector'ın zamanlamasına kalır.
+
+### Sandbox TTL — Zombie Container Önleme
+
+Sandbox'lar **2 saat TTL** ile oluşturulur. Kullanıcı tarayıcı sekmesini kapatırsa ve Streamlit cleanup çalışmazsa, 2 saat sonra OpenSandbox API container'ı otomatik siler → 2GB RAM geri kazanılır.
+
+### 📊 Bellek Koruma Katmanları Özet Tablosu
+
+| # | Katman | Mekanizma | Ne Koruyor? |
+|---|--------|-----------|-------------|
+| 1 | Dosya boyutu tespiti | ≥40MB → DuckDB | pandas OOM |
+| 2 | `del df` | CSV sonrası serbest bırak | Çift kopya |
+| 3 | `read_only=True` | openpyxl lazy load | Schema okuma belleği |
+| 4 | `plt.close('all')` | Figür sarmalama | matplotlib leak |
+| 5 | `_reset_context()` | Timeout sonrası kernel reset | Takılı kernel belleği |
+| 6 | `clean_workspace()` | Yeni konuşma temizliği | Eski veri |
+| 7 | `stop()` + `__del__` | Container sonlandırma | Orphan container |
+| 8 | `MAX_OUTPUT=50K` | Çıktı kırpma | LLM context + sunucu RAM |
+| 9 | `MAX_DOWNLOAD_MB=50` | İndirme limiti | Sunucu RAM |
+| 10 | `wb.close()` | Workbook kapatma | XML parser cache |
+| 11 | Pop pattern | Tüket ve temizle | Artifact birikimi |
+| 12 | `lru_cache(32)` | Sınırlı cache | Skill cache leak |
+| 13 | RotatingFileHandler | 10MB × 5 yedek | Disk dolması |
+| 14 | `shutdown(wait=False)` | Pool temizliği | Thread belleği |
+| 15 | Sandbox TTL | 2 saat auto-delete | Zombie container |
+
+> 🧪 **Kendin dene:** `docker stats` komutuyla sandbox container'ın bellek kullanımını izle. Büyük bir dosya yükle, analiz yap, sonra "Yeni Konuşma"ya bas — bellek kullanımının düştüğünü göreceksin.
+
+---
+
 ## 🎓 Sonuç
 
 Bu tutorial boyunca şunları öğrendin:
@@ -2745,7 +2986,7 @@ Bu tutorial boyunca şunları öğrendin:
 11. **Veritabanının** konuşma ve dosya persistansını
 12. **Tüm akışın** uçtan uca nasıl çalıştığını
 
-**Production ekibi olarak (Adım 11-16):**
+**Production ekibi olarak (Adım 11-17):**
 13. **Docker mimarisi** — 4 container, nasıl bağlantılı, neden host network
 14. **Adım adım deployment** — sunucu hazırlama, build, doğrulama
 15. **Nginx reverse proxy** — HTTPS, WebSocket, rate limiting
@@ -2754,6 +2995,7 @@ Bu tutorial boyunca şunları öğrendin:
 18. **Yedekleme** — PostgreSQL dump, log arşivleme, felaket kurtarma planı
 19. **Sorun giderme** — 6 yaygın sorun ve çözüm prosedürleri
 20. **Ölçeklendirme** — kapasite hesabı, dikey/yatay ölçekleme, maliyet tahmini
+21. **Bellek yönetimi** — 15 koruma katmanı: sandbox, sunucu, disk, thread belleği
 
 Bu proje, modern AI mühendisliğinin birçok ileri kalıbını bir araya getiriyor:
 - **ReAct ajanlar** (düşün → yap → gözlemle)

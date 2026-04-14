@@ -2109,6 +2109,551 @@ Ajan (düzeltme): execute("df = pd.read_excel('/home/sandbox/sales.xlsx')")
 
 ---
 
+## Bölüm 13: Bellek Yönetimi — Projenin "Görünmez" Savunma Katmanı
+
+Bu proje **üç farklı bellek alanı** yönetiyor ve her birinin taşma riski farklı:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  1. Streamlit Sunucu (Ana Süreç)                            │
+│     └─ session_state, artifact_store, DB bağlantıları       │
+│                                                             │
+│  2. Sandbox Container (Docker, izole)                       │
+│     └─ Python kernel, DataFrame'ler, matplotlib figürleri   │
+│                                                             │
+│  3. Disk (Log dosyaları, geçici dosyalar, DB)               │
+│     └─ RotatingFileHandler, sandbox /home/sandbox/ dosyaları│
+└─────────────────────────────────────────────────────────────┘
+```
+
+Her alan için ayrı ayrı bakalım hangi mekanizmalar var, neden o şekilde yapılmış ve alternatifleri neydi.
+
+---
+
+### 13.1 Sandbox Container Belleği — En Tehlikeli Alan
+
+Sandbox, kullanıcının kodunun çalıştığı yer. Bellek taşması en çok burada olur çünkü
+kullanıcının analiz ettiği dosya boyutunu kontrol edemiyoruz.
+
+#### 13.1.1 pandas Bellek Çarpanı ve DuckDB Stratejisi
+
+🔗 [file_parser.py:315-321](https://github.com/CYBki/code-execution-agent/blob/main/src/tools/file_parser.py#L315-L321)
+
+```python
+output += (
+    f"\n\n⚠️ BÜYÜK DOSYA ({size_mb:.1f} MB ≥ 40MB) — DUCKDB STRATEJİSİ ZORUNLU. "
+    "pandas ile pd.read_excel() KULLANMA (çok yavaş/bellek sorunu). "
+    "Doğru strateji: "
+    "① df = pd.read_excel(path) ile CSV'ye çevir: df.to_csv('/home/sandbox/temp.csv', index=False); del df "  # ← del df KRİTİK!
+    "② duckdb.sql(\"SELECT ... FROM read_csv_auto('/home/sandbox/temp.csv')\").df() "
+    "Threshold: file_size_mb >= 40 → DuckDB, < 40 → pandas."
+)
+```
+
+**Problem:** pandas bir Excel dosyasını okurken, dosya boyutunun **3-5 katı** RAM kullanır.
+
+Neden 3-5x? Çünkü:
+1. Dosya disk'ten okunur → RAM'e yüklenir (1x)
+2. Her sütun Python nesnelerine dönüştürülür (her hücre ayrı Python object) (1.5-2x)
+3. String sütunlar her hücre için ayrı str nesnesi oluşturur (1-2x ek)
+4. Index oluşturulur (0.1-0.5x ek)
+
+**Somut örnek:** 40MB Excel → pandas ~120-200MB RAM kullanır. Container limiti 2GB.
+Aynı anda 2 dosya açılırsa → 400MB. Birkaç `groupby()` + `merge()` → kolayca 1GB aşılır.
+
+**Neden DuckDB?** DuckDB "lazy evaluation" kullanır — tüm dosyayı RAM'e yüklemez, SQL sorgusuna
+göre sadece gerekli sütunları ve satırları okur. 40MB dosya → ~5-10MB RAM.
+
+**`del df` neden kritik?**
+```python
+# Yanlış (bellekte iki kopya):
+df = pd.read_excel(path)           # ~120MB RAM
+df.to_csv('/home/sandbox/temp.csv') # disk'e yaz
+# df hâlâ bellekte! DuckDB sorguları ek 10MB daha kullanacak → toplam ~130MB
+
+# Doğru:
+df = pd.read_excel(path)           # ~120MB RAM
+df.to_csv('/home/sandbox/temp.csv') # disk'e yaz
+del df                              # ~120MB serbest bırakıldı ← KRİTİK!
+# Artık DuckDB sadece ~10MB kullanır → toplam ~10MB
+```
+
+`del df` olmadan, Python garbage collector DataFrame'i **hemen** toplamaz çünkü referans
+sayısı 0'a düşmemiş olabilir (eğer başka bir değişkende referans varsa). `del` ile açıkça
+"artık bunu kullanmayacağım" diyorsun.
+
+**💡 Neden 40MB eşiği?**
+- 40MB × 3x = 120MB → container'ın 2GB limitinin %6'sı → güvenli
+- 40MB × 5x = 200MB → hâlâ %10 → güvenli ama üstü riskli
+- 80MB × 5x = 400MB → %20 → birkaç analiz adımıyla 1GB aşılabilir
+- 40MB, "pandas güvenli" ile "pandas riskli" arasındaki sınır
+
+**Alternatif neden elendi?**
+- `chunksize` parametresi (pandas): Her chunk'ı işleyip atabilirsin ama kodun 3x daha karmaşık
+- `modin` veya `vaex`: Ek bağımlılık, sandbox image'ına eklemek gerekir
+- Sadece `gc.collect()`: `del` kadar etkili değil ve zamanlaması belirsiz
+
+---
+
+#### 13.1.2 `read_only=True` — openpyxl Bellek Tasarrufu
+
+🔗 [file_parser.py:107](https://github.com/CYBki/code-execution-agent/blob/main/src/tools/file_parser.py#L107)
+
+```python
+wb = load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
+#                                          ^^^^^^^^^^^^^^  ^^^^^^^^^^^^^
+#                                          %60-70 az RAM   formül yerine sonuç
+```
+
+**Problem:** openpyxl varsayılanda tüm hücre nesnelerini (Cell objects) oluşturur —
+her birinin style, font, border bilgisi var. 10.000 satır × 20 sütun = 200.000 Cell nesnesi.
+
+**`read_only=True` ne yapar?**
+- Cell nesnelerini "lazy" oluşturur — iterasyon sırasında, talep edildikçe
+- Style bilgisini yüklemez (bize zaten sadece `number_format` lazım)
+- Bellek kullanımını **%60-70** azaltır
+
+**`data_only=True` ne yapar?**
+- `=SUM(A1:A10)` gibi formülleri yüklemez, sadece hesaplanmış değerleri okur
+- Formül ağacı belleğe yüklenmez → ek tasarruf
+
+**Neden `read_only=True` her yerde kullanılmıyor?**
+- `download_file.py`'de **kullanılamaz** çünkü orada hücre değerlerini **değiştiriyoruz**
+  (datetime → date dönüşümü). `read_only=True` ile yazma işlemi yapılamaz.
+
+---
+
+#### 13.1.3 matplotlib Figür Birikimi — `plt.close('all')`
+
+🔗 [visualization.py:34](https://github.com/CYBki/code-execution-agent/blob/main/src/tools/visualization.py#L34)
+
+```python
+wrapped_code = code + "\nimport matplotlib; matplotlib.pyplot.close('all')"
+```
+
+**Problem:** matplotlib her `plt.figure()` veya `plt.subplots()` çağrısında bellekte bir Figure
+nesnesi oluşturur ve **otomatik silmez**. Bir analiz oturumunda 10 grafik çizilirse:
+
+```
+Figür 1: ~5MB  → toplam: 5MB
+Figür 2: ~5MB  → toplam: 10MB
+Figür 3: ~5MB  → toplam: 15MB
+...
+Figür 10: ~5MB → toplam: 50MB  ← hepsi hâlâ bellekte!
+```
+
+Her figür, pixel buffer + axis nesneleri + text rendering cache tutar.
+Yüksek DPI (150) ile bu değerler daha da artar.
+
+**Neden kullanıcının kodu yerine biz ekliyoruz?**
+Ajan her zaman `plt.close()` yazmayı hatırlamayabilir — LLM'ler bu tür "temizlik" kodunu
+sıklıkla unutur. Biz kodu **sarmallayarak** (wrap) garanti altına alıyoruz.
+
+**Neden `plt.close('all')` ve `plt.close()` değil?**
+- `plt.close()` → sadece **aktif** figürü kapatır
+- `plt.close('all')` → **tüm** figürleri kapatır
+- Kullanıcı birden fazla figür açıp sadece birine `plt.savefig()` yapmış olabilir →
+  diğerleri hâlâ açık → `'all'` ile hepsini temizle
+
+**Neden `del fig` yeterli değil?**
+matplotlib, figürleri kendi iç `Gcf` (global current figure) manager'ında da tutar.
+`del fig` referansı kaldırır ama `Gcf`'teki referans kalır → garbage collector toplamaz.
+`plt.close()` hem `Gcf`'ten çıkarır hem figürü destroy eder.
+
+---
+
+#### 13.1.4 Kernel Timeout ve Bellek Kurtarma — `_reset_context()`
+
+🔗 [manager.py:75-94](https://github.com/CYBki/code-execution-agent/blob/main/src/sandbox/manager.py#L75-L94)
+
+```python
+def _reset_context(self):
+    try:
+        old_id = getattr(self._py_context, "id", None)
+        if old_id:
+            try:
+                self._interpreter.codes.delete_context(old_id)  # ← Eski context'in TÜM değişkenlerini sil
+            except Exception:
+                pass  # Takılı olabilir — sorun değil
+        self._py_context = self._interpreter.codes.create_context(  # ← Temiz kernel
+            SupportedLanguage.PYTHON
+        )
+    except Exception as e:
+        logger.error("Failed to reset kernel context: %s", e)
+```
+
+**Bu neden bellek yönetimi?** Timeout olan bir kodun bellekte tuttuğu her şeyi temizler.
+
+**Senaryo:** Kullanıcı 200MB'lık bir DataFrame üzerinde karmaşık bir `groupby().apply()`
+çalıştırdı → 180 saniye timeout oldu → `_reset_context()` çağrıldı.
+
+Eğer `_reset_context()` yapılmazsa:
+- Eski context'teki 200MB DataFrame **hâlâ bellekte** (eski kernel reference tutuyor)
+- Yeni context oluşturulsa bile eski Python nesneleri serbest kalmaz
+- Sonraki execute'lar ek bellek kullanır → birikir → OOM (Out of Memory)
+
+`delete_context()` eski kernel'ın **tüm Python namespace'ini** temizler — `df`, `m`, `results`
+gibi tüm değişkenler garbage collector'a iade edilir.
+
+---
+
+#### 13.1.5 Yeni Konuşma = Temiz Bellek — `clean_workspace()`
+
+🔗 [manager.py:296-324](https://github.com/CYBki/code-execution-agent/blob/main/src/sandbox/manager.py#L296-L324)
+
+```python
+def clean_workspace(self):
+    # 1. Dosya temizliği
+    self._backend.execute(
+        f"rm -rf {SANDBOX_HOME}/* 2>/dev/null; "      # ← Disk'teki dosyaları sil
+        "rm -rf /tmp/_run_*.py 2>/dev/null; "           # ← Geçici Python dosyalarını sil
+        "echo CLEAN_OK"
+    )
+    # 2. Kernel temizliği
+    if self._interpreter is not None:
+        self._interpreter.codes.delete_context(self._py_context.id)  # ← ESKİ kernel sil (TÜM değişkenler)
+        self._py_context = self._interpreter.codes.create_context(    # ← YENİ kernel oluştur
+            SupportedLanguage.PYTHON
+        )
+```
+
+**İki aşamalı temizlik:**
+1. **Disk:** `/home/sandbox/` altındaki tüm dosyalar (Excel, CSV, PDF, PNG) silinir
+2. **Bellek:** Eski Python kernel context'i tamamen yok edilir → tüm DataFrame'ler, değişkenler serbest
+
+**Neden container'ı yeniden oluşturmuyoruz?**
+Container oluşturma ~5 saniye sürer. Kernel context reset ~100ms sürer.
+Container'ı **yeniden kullanıp** sadece bellek ve dosyaları temizlemek 50x daha hızlı.
+
+**💡 Neden bu tasarım önemli?**
+Kullanıcı "Yeni Konuşma" butonuna basınca, önceki analizin 500MB'lık DataFrame'i
+bellekten tamamen temizlenir. Yeni analiz **temiz** bir bellekle başlar.
+Container restart gerekmeden aynı container'da sıfır bellek yüküyle devam edilir.
+
+---
+
+#### 13.1.6 Container Yaşam Sonu — `stop()` ve `__del__`
+
+🔗 [manager.py:326-346](https://github.com/CYBki/code-execution-agent/blob/main/src/sandbox/manager.py#L326-L346)
+
+```python
+def stop(self):
+    if self._sandbox is not None:
+        try:
+            self._sandbox.kill()     # ← Container process'ini öldür
+            self._sandbox.close()    # ← API bağlantısını kapat
+        except Exception:
+            pass
+        finally:
+            self._sandbox = None     # ← Referansları None yap
+            self._backend = None     # ← Python GC bu nesneleri toplar
+            self._interpreter = None
+            self._py_context = None
+            self._packages_ready = threading.Event()
+
+def __del__(self):
+    # Best-effort — Python GC garanti etmiyor
+    try:
+        self.stop()
+    except Exception:
+        pass
+```
+
+**4 katmanlı referans temizliği:**
+1. `kill()` → Docker container'ın process'ini öldürür → container'ın RAM'i OS'a geri döner
+2. `close()` → HTTP/WebSocket bağlantısını kapatır → socket belleği serbest
+3. `= None` → Python referanslarını kaldırır → GC nesneleri toplar
+4. `threading.Event()` → Eski Event nesnesini değiştirir → GC eski Event'i toplar
+
+**Neden `__del__` güvenilir değil?**
+Python `__del__`'i garbage collector çalıştığında çağırır — ama **ne zaman** çalışacağı
+garanti değil. Döngüsel referanslar varsa hiç çağrılmayabilir. Bu yüzden `atexit` handler
+(session.py'de) esas temizlik mekanizması — `__del__` sadece "ihtimale karşı" yedek.
+
+---
+
+### 13.2 Execute Çıktı Belleği — LLM Context Koruması
+
+#### 13.2.1 `MAX_OUTPUT = 50_000` — Çıktı Kırpma
+
+🔗 [execute.py:134-136](https://github.com/CYBki/code-execution-agent/blob/main/src/tools/execute.py#L134-L136)
+
+```python
+MAX_OUTPUT = 50_000
+if output and len(output) > MAX_OUTPUT:
+    output = output[:MAX_OUTPUT] + f"\n... [truncated, {len(output)} total chars]"
+```
+
+**Problem:** `print(df)` yazıldığında 50.000 satırlık DataFrame tüm çıktıyı yazar.
+Bu çıktı:
+1. Sandbox → Streamlit sunucusuna aktarılır (ağ belleği)
+2. LangChain ToolMessage'a yazılır (Python string belleği)
+3. Claude API'ye gönderilir (API payload belleği)
+4. Claude'un context window'unda yer kaplar (token belleği)
+
+50.000 satır × ortalama 100 karakter = 5MB string. Bu:
+- Claude'un context window'unu gereksiz doldurur → sonraki adımlarda "context too long" hatası
+- API maliyetini artırır (token başına ücret)
+- Streamlit'in belleğinde gereksiz büyük string tutar
+
+**Neden 50.000 karakter?**
+- 50K karakter ≈ 12-15K token → Claude'un 200K context window'unun ~%7'si
+- Yeterince büyük: normal `print(df.describe())`, hata mesajları, birkaç sayfa çıktı rahatça sığar
+- Yeterince küçük: tüm DataFrame dump'ı engellenir
+- Kırpıldığında `[truncated, 847293 total chars]` bilgisi verir → ajan durumun farkında olur
+
+**Alternatif neden elendi?**
+- Kırpmama → context overflow, maliyet patlaması
+- Daha küçük limit (10K) → meşru çıktıları da kırpar (uzun hata mesajları, `df.describe()` çıktıları)
+- `print()` engellemek → kullanıcı kodunu kısıtlayamazsın, ajan print'e ihtiyaç duyuyor
+
+---
+
+#### 13.2.2 Log Çıktısı Kırpma — 300 Karakter Preview
+
+🔗 [execute.py:126-128](https://github.com/CYBki/code-execution-agent/blob/main/src/tools/execute.py#L126-L128)
+
+```python
+out_preview = (output or "")[:300].replace("\n", "\\n")
+logger.info("execute output (exit=%s): %s", exit_code, out_preview)
+```
+
+**Log dosyasına** tüm çıktıyı yazmıyoruz — sadece ilk 300 karakter.
+
+**Neden?** Log dosyası `RotatingFileHandler` ile 10MB limit var (aşağıda detay). Eğer
+her execute çıktısını tam yazarsak, tek bir 5MB çıktı log dosyasının yarısını doldurur.
+300 karakter, debug için yeterli — "ne çalıştı ve sonucu ne oldu" anlaşılır.
+
+---
+
+### 13.3 Dosya İndirme Belleği — `MAX_DOWNLOAD_MB = 50`
+
+🔗 [download_file.py:89-91](https://github.com/CYBki/code-execution-agent/blob/main/src/tools/download_file.py#L89-L91)
+
+```python
+MAX_DOWNLOAD_MB = 50
+if len(resp.content) > MAX_DOWNLOAD_MB * 1024 * 1024:
+    return f"❌ File too large ({len(resp.content) // 1024 // 1024}MB). Max {MAX_DOWNLOAD_MB}MB."
+```
+
+**Problem:** Sandbox'tan indirilen dosya Streamlit sunucusunun belleğine yüklenir
+(`resp.content` → `artifact_store.add_download()` → `st.download_button()`).
+50MB'lık bir dosya, sunucu tarafında 50MB RAM kullanır.
+
+**Neden 50MB?**
+- PDF rapor: genellikle 1-5MB → rahatça geçer
+- Excel çıktısı: genellikle 5-20MB → rahatça geçer
+- Dev CSV dump: 100MB+ olabilir → engellenmeli (kullanıcı DuckDB ile filtrelesin)
+
+**💡 İlişkili bellek akışı:**
+```
+Sandbox RAM → download_files() → resp.content (sunucu RAM)
+→ _clean_excel_dates() (eğer Excel ise, ek kopya)
+→ artifact_store.add_download() (sunucu RAM'de tutuluyor)
+→ st.download_button() (kullanıcı indirir)
+→ pop_downloads() (artifact_store'dan temizlenir)
+```
+
+Her aşamada geçici bir kopya oluşabilir. 50MB dosya için en kötü durum:
+~150MB sunucu RAM (resp.content + Excel cleaning buffer + artifact store).
+Bu yüzden limit var.
+
+---
+
+#### 13.3.1 `wb.close()` — Workbook Bellek Temizliği
+
+🔗 [download_file.py:55-58](https://github.com/CYBki/code-execution-agent/blob/main/src/tools/download_file.py#L55-L58) | 
+🔗 [file_parser.py:164](https://github.com/CYBki/code-execution-agent/blob/main/src/tools/file_parser.py#L164)
+
+```python
+# download_file.py — her iki path'de de close
+if modified:
+    buf = io.BytesIO()
+    wb.save(buf)
+    wb.close()        # ← Değişiklik yapıldıysa: kaydet, sonra kapat
+    return buf.getvalue()
+
+wb.close()            # ← Değişiklik yoksa: direkt kapat
+return content
+
+# file_parser.py
+wb.close()            # ← Schema okuma bitti, workbook'u kapat
+```
+
+**Neden açıkça `close()` çağırıyoruz?**
+openpyxl Workbook nesnesi, özellikle `read_only=False` modunda, dahili XML parser cache'leri
+ve hücre nesneleri tutar. `close()` çağırmadan fonksiyondan çıkarsak, bu nesneler garbage
+collector'ın insafına kalır — ve Python'da GC zamanlaması belirsizdir.
+
+`close()` şunları yapar:
+- XML parser'ları kapatır (libxml2 C belleği serbest)
+- Worksheet cache'lerini temizler
+- `read_only` modda lazy iterator'ları kapatır (dosya handle serbest)
+
+---
+
+### 13.4 Streamlit Sunucu Belleği
+
+#### 13.4.1 ArtifactStore Pop Pattern — Tüket ve Temizle
+
+🔗 [artifact_store.py:42-55](https://github.com/CYBki/code-execution-agent/blob/main/src/tools/artifact_store.py#L42-L55)
+
+```python
+def pop_html(self) -> Optional[str]:
+    with self._lock:
+        items = self._html_items[:]  # ← Kopyala
+        self._html_items.clear()      # ← Orijinali temizle
+    return items[-1] if items else None
+
+def pop_downloads(self) -> List[dict]:
+    with self._lock:
+        items = self._downloads[:]   # ← Kopyala
+        self._downloads.clear()       # ← Orijinali temizle
+    return items
+```
+
+**Bu neden bellek yönetimi?**
+Her `generate_html()` çağrısı HTML string'i artifact store'a ekler. Her `download_file()`
+çağrısı dosya içeriğini (bytes) ekler.
+
+Eğer `pop` yerine `get` kullansak (temizlemeden okusak):
+- 5 dashboard HTML'i × 100KB = 500KB birikir
+- 3 dosya indirme × 10MB = 30MB birikir
+- Oturum boyunca hiç temizlenmez → bellek sürekli büyür
+
+`pop` pattern'i **tüket ve temizle** prensibiyle çalışır:
+1. UI thread artifact'ı alır (`pop`)
+2. Artifact listesi temizlenir (`clear`)
+3. UI thread artifact'ı render eder
+4. Render bittikten sonra UI thread'in kendi referansı da scope dışına çıkar → GC toplar
+
+**Neden `clear()` ve `del` değil?**
+`clear()` listeyi boşaltır ama liste nesnesi aynı kalır — yeni öğeler eklenebilir.
+`del self._html_items` → listeyi yok eder → sonraki `add_html()` çağrısı `AttributeError` verir.
+
+---
+
+#### 13.4.2 `lru_cache(maxsize=32)` — Skill Dosyası Cache Sınırı
+
+🔗 [loader.py:14-15](https://github.com/CYBki/code-execution-agent/blob/main/src/skills/loader.py#L14-L15)
+
+```python
+@lru_cache(maxsize=32)
+def load_skill(skill_path: str) -> Optional[str]:
+```
+
+**Neden `maxsize=32` ve sınırsız değil?**
+- Projede ~10 skill/referans dosyası var → 32 fazlasıyla yeterli
+- Her dosya ~5-30KB → 32 × 30KB = ~1MB maximum cache
+- `maxsize=None` (sınırsız) kullansak ve bir bug yüzünden farklı path'ler üretilse
+  (örneğin timestamp'li path) → cache sonsuz büyür → bellek sızıntısı
+- `maxsize=32` bunu önler: 33. dosya eklenince en eski atılır (LRU eviction)
+
+---
+
+### 13.5 Disk Bellek Yönetimi — RotatingFileHandler
+
+🔗 [logging_config.py:126-130](https://github.com/CYBki/code-execution-agent/blob/main/src/utils/logging_config.py#L126-L130)
+
+```python
+all_handler = RotatingFileHandler(
+    os.path.join(_LOG_DIR, "app.log"),
+    maxBytes=10 * 1024 * 1024,    # ← 10MB
+    backupCount=5,                 # ← En fazla 5 yedek
+    encoding="utf-8",
+)
+```
+
+**Her üç log dosyası için aynı ayar:** `app.log`, `app_error.log`, `audit.log`
+
+**Nasıl çalışır?**
+```
+app.log → 10MB dolduğunda:
+  app.log → app.log.1 (yeniden adlandır)
+  yeni boş app.log oluştur
+  app.log.1 → app.log.2 ... app.log.5
+  app.log.5 → silinir (6. yedek tutulmaz)
+```
+
+**Toplam disk kullanımı:** 3 dosya × (10MB aktif + 5 × 10MB yedek) = 3 × 60MB = **180MB maximum**
+
+**Neden bu önemli?**
+Production'da disk dolması sunucuyu çökertir. RotatingFileHandler olmadan:
+- Yoğun kullanımda günde 50-100MB log üretilebilir
+- 1 hafta → 700MB, 1 ay → 3GB
+- Disk dolarsa: veritabanı yazamaz, sandbox dosya oluşturamaz, Streamlit çöker
+
+---
+
+### 13.6 ThreadPoolExecutor Bellek — `shutdown(wait=False)`
+
+🔗 [manager.py:114-137](https://github.com/CYBki/code-execution-agent/blob/main/src/sandbox/manager.py#L114-L137)
+
+```python
+pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+future = pool.submit(self._interpreter.codes.run, py_code, context=self._py_context)
+try:
+    result = future.result(timeout=timeout)
+except concurrent.futures.TimeoutError:
+    future.cancel()
+    pool.shutdown(wait=False)    # ← ZORUNLU: wait=True olursa sonsuza kadar bekler
+    self._reset_context()
+    return _ExecuteResult(output=f"Error: timed out...", exit_code=1)
+else:
+    pool.shutdown(wait=False)    # ← Başarılı durumda da pool'u temizle
+```
+
+**Bellek açısından:**
+- `ThreadPoolExecutor` bir thread + iş kuyruğu tutar → ~1MB overhead
+- Her `execute()` çağrısında yeni pool oluşturulur → eski pool temizlenmeli
+- `shutdown(wait=False)` → pool kaynakları serbest bırakılır, beklemeden
+- `shutdown(wait=True)` → takılmış thread bitene kadar bekle → **sonsuz bekleme!**
+- `with` bloğu kullanılmaz çünkü `__exit__` → `shutdown(wait=True)` çağırır → aynı sorun
+
+**Neden her çağrıda yeni pool?**
+Aynı pool'u yeniden kullanmak mantıklı görünür ama:
+- Timeout olan bir thread pool'da takılı kalır (`max_workers=1`)
+- Sonraki submit, takılı thread bitmeden çalışamaz
+- Yeni pool → her zaman temiz thread → garanti çalışma
+
+---
+
+### 13.7 Sandbox TTL — Uzun Vadeli Bellek Kontrolü
+
+Sandbox container'ları varsayılan **2 saat TTL** ile oluşturulur. 2 saat boyunca hiç
+kullanılmazsa OpenSandbox API otomatik olarak container'ı siler.
+
+**Neden önemli?**
+- Kullanıcı tarayıcı sekmesini kapatırsa, Streamlit `on_session_end` her zaman çalışmaz
+- Orphan container → Docker'da 2GB RAM ayırılmış durur → sunucu belleği boşa harcanır
+- TTL sayesinde en kötü 2 saat sonra otomatik temizlik → bellek geri kazanılır
+
+**Tüm bellek koruma katmanları özet:**
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│  KATMAN                     │ MEKANİZMA            │ NE KORUYOR?      │
+├────────────────────────────────────────────────────────────────────────┤
+│  1. Dosya boyutu tespiti    │ ≥40MB → DuckDB       │ pandas OOM       │
+│  2. del df                  │ CSV sonrası serbest   │ Çift kopya       │
+│  3. read_only=True          │ openpyxl lazy load    │ Schema belleği   │
+│  4. plt.close('all')        │ Figür temizliği       │ matplotlib leak  │
+│  5. _reset_context()        │ Timeout sonrası reset │ Takılı kernel    │
+│  6. clean_workspace()       │ Yeni konuşma temizliği│ Eski veri        │
+│  7. stop() + __del__        │ Container sonlandırma │ Orphan container │
+│  8. MAX_OUTPUT=50K          │ Çıktı kırpma          │ LLM context      │
+│  9. MAX_DOWNLOAD_MB=50      │ İndirme limiti        │ Sunucu RAM       │
+│ 10. wb.close()              │ Workbook temizliği    │ XML parser cache │
+│ 11. pop pattern             │ Tüket ve temizle      │ Artifact birikimi│
+│ 12. lru_cache(32)           │ Sınırlı cache         │ Skill cache leak │
+│ 13. RotatingFileHandler     │ 10MB × 5 yedek        │ Disk dolması     │
+│ 14. shutdown(wait=False)    │ Pool temizliği         │ Thread belleği   │
+│ 15. Sandbox TTL             │ 2 saat otomatik silme │ Zombie container │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
 ## Son Söz
 
 Bu dokümanı okuduysan artık her satırın ne yaptığını VE neden o şekilde yazıldığını
@@ -2124,6 +2669,7 @@ biliyorsun. Önemli tasarım kararları:
 8. **Çift backend** — SQLite (dev) + PostgreSQL (prod) aynı kodla
 9. **publish_html marker** — kernel → dosya → marker → artifact store → iframe
 10. **Circuit breaker** — sonsuz döngü tespiti ve durdurma
+11. **15 katmanlı bellek yönetimi** — sandbox, sunucu, disk, thread belleği koruması
 
 Her karar bir problemi çözüyor. Alternatifler denenip elenmiş. Bu doküman o sürecin
 kaydı.
