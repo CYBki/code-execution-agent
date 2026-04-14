@@ -1,8 +1,10 @@
-# 🛠️ CODE_WALKTHROUGH_TR.md — Projeyi Sıfırdan Yazıyoruz
+# 🛠️ CODE_WALKTHROUGH_TR.md — Projeyi Sıfırdan, Satır Satır Yazıyoruz
 
-> **Bu doküman nedir?** Projeyi sanki sıfırdan, adım adım yazıyormuşsun gibi anlatıyor.
-> Her bölümde açıklamayı oku, sonra 🔗 linkine tıkla ve GitHub'da ilgili kodu gör.
-> Okumaya devam et, sonraki linke tıkla — böylece projeyi baştan sona "yazmış" olursun.
+> **Bu doküman nedir?** Projeyi sanki sıfırdan yazıyormuşsun gibi, **her satırı** açıklıyor.
+> Sadece "ne yapıyor" değil — **neden bu şekilde yazdık**, alternatifler neydi, hangi
+> tuzaklara düştük ve neden bu çözümü seçtik — hepsini anlatıyor.
+>
+> 🔗 linklerine tıkla → GitHub'da kodu gör → açıklamayı oku → sonraki adıma geç.
 
 **Repo:** [CYBki/code-execution-agent](https://github.com/CYBki/code-execution-agent)
 
@@ -12,172 +14,294 @@
 
 | # | Bölüm | Ne Yazıyoruz? |
 |---|-------|---------------|
-| 0 | [Proje İskeleti](#bölüm-0-proje-i̇skeleti) | Dizin yapısı, bağımlılıklar |
-| 1 | [Konfigürasyon](#bölüm-1-konfigürasyon--api-anahtarları) | API anahtarı çözümleme |
-| 2 | [Logging Altyapısı](#bölüm-2-logging-altyapısı) | JSON loglar, audit trail |
-| 3 | [Veritabanı Katmanı](#bölüm-3-veritabanı-katmanı) | SQLite/PostgreSQL, şema |
-| 4 | [Sandbox Yöneticisi](#bölüm-4-sandbox-yöneticisi) | Docker container, kalıcı kernel |
-| 5 | [Artifact Store](#bölüm-5-artifact-store) | Thread-safe veri köprüsü |
-| 6 | [Araçlar (Tools)](#bölüm-6-araçlar-tools) | parse_file, execute, generate_html, download_file, visualization |
-| 7 | [Skill Sistemi](#bölüm-7-skill-sistemi) | Progressive disclosure, tetikleme |
-| 8 | [Sistem Prompt'u](#bölüm-8-sistem-promptu) | ReAct döngüsü, kurallar |
-| 9 | [Ajan Beyni](#bölüm-9-ajan-beyni--agentgraphpy) | build_agent, smart interceptor |
-| 10 | [Kullanıcı Arayüzü](#bölüm-10-kullanıcı-arayüzü) | Streamlit UI, streaming |
-| 11 | [Giriş Noktası](#bölüm-11-giriş-noktası--apppy) | Her şeyi birleştiriyoruz |
-| 12 | [Uçtan Uca Akış](#bölüm-12-uçtan-uca-akış) | Tam senaryo |
+| 1 | [Konfigürasyon](#bölüm-1-konfigürasyon) | API anahtarı çözümleme — neden tek fonksiyon? |
+| 2 | [Logging](#bölüm-2-logging-altyapısı) | JSON loglar — neden yapılandırılmış? |
+| 3 | [Veritabanı](#bölüm-3-veritabanı-katmanı) | Çift backend — neden ikisi birden? |
+| 4 | [Sandbox](#bölüm-4-sandbox-yöneticisi) | Kalıcı kernel — neden pickle değil? |
+| 5 | [Artifact Store](#bölüm-5-artifact-store) | Thread güvenliği — neden Lock? |
+| 6 | [Araçlar](#bölüm-6-araçlar-tools) | Factory pattern — neden closure? |
+| 7 | [Skill Sistemi](#bölüm-7-skill-sistemi) | Progressive disclosure — neden dinamik prompt? |
+| 8 | [Sistem Prompt'u](#bölüm-8-sistem-promptu) | 696 satır kural — neden bu kadar çok? |
+| 9 | [Ajan Beyni](#bölüm-9-ajan-beyni) | Smart interceptor — neden 12 kural? |
+| 10 | [UI](#bölüm-10-kullanıcı-arayüzü) | Streaming — neden chunk chunk? |
+| 11 | [Giriş Noktası](#bölüm-11-giriş-noktası) | app.py — neden bu sıralama? |
+| 12 | [Uçtan Uca](#bölüm-12-uçtan-uca-akış) | Tam senaryo — her adımda ne oluyor? |
 
 ---
 
-## Bölüm 0: Proje İskeleti
+## Bölüm 1: Konfigürasyon
 
-Bir projeye başlarken ilk yapacağın şey dizin yapısını kurmak. İşte bu projenin iskeleti:
+Projeye başlarken ilk soru: API anahtarlarını nasıl yöneteceğiz?
 
-```
-code-execution-agent/
-├── app.py                          ← Giriş noktası (Streamlit)
-├── pyproject.toml                  ← Bağımlılıklar
-├── src/
-│   ├── utils/
-│   │   ├── config.py               ← API anahtarı çözümleme
-│   │   └── logging_config.py       ← JSON log sistemi
-│   ├── storage/
-│   │   └── db.py                   ← Veritabanı (SQLite/PostgreSQL)
-│   ├── sandbox/
-│   │   └── manager.py              ← Docker sandbox yaşam döngüsü
-│   ├── tools/
-│   │   ├── artifact_store.py       ← Thread-safe veri köprüsü
-│   │   ├── file_parser.py          ← Dosya şeması çıkarma
-│   │   ├── execute.py              ← Kod çalıştırma
-│   │   ├── generate_html.py        ← HTML dashboard render
-│   │   ├── download_file.py        ← Dosya indirme
-│   │   └── visualization.py        ← Grafik üretimi
-│   ├── skills/
-│   │   ├── registry.py             ← Skill tetikleme kuralları
-│   │   └── loader.py               ← Prompt derleme
-│   ├── agent/
-│   │   ├── prompts.py              ← Sistem prompt'u (696 satır!)
-│   │   └── graph.py                ← Ajan oluşturucu + smart interceptor
-│   └── ui/
-│       ├── session.py              ← Oturum yönetimi
-│       ├── components.py           ← Kenar çubuğu
-│       ├── styles.py               ← CSS stilleri
-│       └── chat.py                 ← Sohbet arayüzü + streaming
-└── skills/
-    ├── xlsx/SKILL.md               ← Excel analiz kuralları
-    ├── csv/SKILL.md                ← CSV analiz kuralları
-    ├── pdf/SKILL.md                ← PDF analiz kuralları
-    └── visualization/SKILL.md      ← Görselleştirme kuralları
-```
+### 1.1 Problem
 
-> 💡 **Neden bu sırayla yazıyoruz?** Bağımlılık ağacını takip ediyoruz: altta yatan
-> katmanları (config, logging, DB) önce yaz, sonra sandbox, sonra araçlar, sonra ajan,
-> en son UI. Her katman yalnızca altındakilere bağımlı.
+İki farklı ortamımız var:
+- **Lokal geliştirme:** `.env` dosyasında `ANTHROPIC_API_KEY=sk-ant-...`
+- **Streamlit Cloud (production):** Dashboard'dan girilen `secrets.toml`
 
----
+Eğer her yerde `os.getenv("ANTHROPIC_API_KEY")` kullansak, Streamlit Cloud'da çalışmaz
+çünkü orada anahtarlar `st.secrets` içinde. Tersi de geçerli — `st.secrets` lokal'de
+dosya bulamayınca hata fırlatır.
 
-## Bölüm 1: Konfigürasyon — API Anahtarları
-
-Her projenin ilk ihtiyacı: API anahtarlarını güvenli şekilde okumak. Biz bunu tek bir
-fonksiyonla çözüyoruz.
-
-### 1.1 `get_secret()` — Tek Fonksiyon, İki Kaynak
+### 1.2 Çözüm: Tek Fonksiyon, İki Kaynak
 
 🔗 [**src/utils/config.py** — Tam dosya (23 satır)](https://github.com/CYBki/code-execution-agent/blob/main/src/utils/config.py)
 
 ```python
+import os
+import streamlit as st
+
+
 def get_secret(key: str) -> str:
-    """Resolve a secret value with priority: st.secrets → os.environ → raise."""
+    """Resolve a secret value with priority: st.secrets → os.environ → raise.
+
+    Streamlit Cloud → st.secrets (from secrets.toml or dashboard)
+    Local dev       → .env (loaded via python-dotenv)
+    """
+```
+
+**Satır satır:**
+
+```python
     try:
-        return st.secrets[key]
-    except (KeyError, FileNotFoundError):
-        value = os.getenv(key)
+        return st.secrets[key]                    # ← İLK BURAYA BAK
+    except (KeyError, FileNotFoundError):         # ← İki farklı hata yakalıyoruz
+```
+
+`st.secrets[key]` iki şekilde başarısız olabilir:
+- `KeyError`: `secrets.toml` var ama bu anahtar yok
+- `FileNotFoundError`: `secrets.toml` dosyası hiç yok (lokal geliştirme)
+
+İkisini de yakalıyoruz çünkü lokal'de `.secrets` klasörü bile olmayabilir.
+
+```python
+        value = os.getenv(key)                    # ← İKİNCİ ŞANS: ortam değişkeni
         if not value:
-            raise ValueError(f"'{key}' not found...")
+            raise ValueError(                     # ← HİÇBİR YERDE YOK → HATA
+                f"'{key}' not found. "
+                f"Add it to .env file or Streamlit secrets."
+            )
         return value
 ```
 
-**Mantık basit:** Önce Streamlit Cloud'un `st.secrets` deposuna bak (production).
-Bulamazsan `os.environ`'a düş (lokal geliştirme — `.env` dosyasından yüklenir).
-İkisinde de yoksa hata fırlat.
+> 💡 **Neden `ValueError` ve `KeyError` değil?** `ValueError` daha açıklayıcı bir mesaj
+> taşıyabiliyor. Kullanıcıya "nereye eklemen lazım" diyebiliyoruz. `KeyError` sadece
+> anahtarı gösterirdi.
 
-> 💡 **Neden böyle?** Streamlit Cloud'da `secrets.toml` kullanılır. Lokal'de `.env`
-> dosyası. Tek fonksiyon ikisini de destekliyor — kod tarafı hangi ortamda
-> çalıştığını bilmek zorunda değil.
+> 💡 **Alternatif neydi?** Her dosyada `if os.getenv(): ... elif st.secrets: ...` yazabilirdik.
+> Ama bu 10+ yerde tekrar ederdi. Tek fonksiyon → tek sorumluluk → tek değişiklik noktası.
+> Yarın üçüncü bir kaynak eklensek (AWS Secrets Manager gibi), sadece bu fonksiyonu değiştiririz.
 
 ---
 
 ## Bölüm 2: Logging Altyapısı
 
-Production'da "bir şey çalışmıyor" dediğinde tek silahın loglar. Biz JSON formatında
-yapılandırılmış loglar yazıyoruz.
+Production'da bir şey patlayınca tek silahın loglar. "Bir hata oldu" yazan log işe
+yaramaz — hangi kullanıcı, hangi oturum, hangi araç, ne zaman?
 
-### 2.1 `SessionContext` — Oturum Korelasyonu
+### 2.1 `SessionContext` — Thread-Local Oturum Takibi
 
-🔗 [**src/utils/logging_config.py:25-45** — SessionContext sınıfı](https://github.com/CYBki/code-execution-agent/blob/main/src/utils/logging_config.py#L25-L45)
+🔗 [**src/utils/logging_config.py:25-45** — SessionContext](https://github.com/CYBki/code-execution-agent/blob/main/src/utils/logging_config.py#L25-L45)
 
 ```python
 class SessionContext:
     """Thread-local storage for session_id correlation."""
     _local = threading.local()
+```
 
+**Neden `threading.local()`?** Streamlit her kullanıcı için ayrı thread çalıştırıyor.
+Global bir değişken kullansak, Kullanıcı A'nın session_id'si Kullanıcı B'nin loglarına
+karışır. `threading.local()` her thread'e özel depolama sağlıyor — thread A `session_id = "abc"`
+yazarsa, thread B bunu görmez.
+
+```python
     @classmethod
     def set(cls, session_id: str):
-        cls._local.session_id = session_id
+        cls._local.session_id = session_id    # ← Bu thread'e özel
+
+    @classmethod
+    def get(cls) -> str:
+        return getattr(cls._local, "session_id", "")  # ← Yoksa boş string
 ```
 
-Her kullanıcı oturumunun bir `session_id`'si var. Bu sınıf o ID'yi thread-local
-değişkende tutuyor. Log yazıldığında otomatik olarak ekleniyor — böylece hangi logun
-hangi kullanıcıya ait olduğunu hemen görürsün.
+**Neden `getattr` ile default?** İlk log yazıldığında henüz `set()` çağrılmamış olabilir.
+`cls._local.session_id` direkt erişsek `AttributeError` alırız. `getattr(..., "")` ile
+güvenli erişim sağlıyoruz.
 
-### 2.2 `JSONFormatter` — Yapılandırılmış Log Çıktısı
-
-🔗 [**src/utils/logging_config.py:50-81** — JSONFormatter sınıfı](https://github.com/CYBki/code-execution-agent/blob/main/src/utils/logging_config.py#L50-L81)
-
-Her log satırı şöyle bir JSON objesi oluyor:
-
-```json
-{"ts":"2026-04-14T08:52:00.123Z","level":"ERROR","logger":"src.sandbox.manager",
- "msg":"execute failed: timeout","session_id":"abc-123"}
+```python
+    @classmethod
+    def clear(cls):
+        cls._local.session_id = ""            # ← Oturum bitince temizle
 ```
 
-Formatter `SessionContext`'ten `session_id`'yi alıp her loga ekliyor. Ayrıca
-`tool_name`, `action`, `blocked`, `duration_s` gibi ek alanları da destekliyor —
-bunlar audit logları için kritik.
+### 2.2 `JSONFormatter` — Her Log Satırı Bir JSON
+
+🔗 [**src/utils/logging_config.py:50-81** — JSONFormatter](https://github.com/CYBki/code-execution-agent/blob/main/src/utils/logging_config.py#L50-L81)
+
+```python
+class JSONFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        log_entry = {
+            "ts": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
+```
+
+**Neden UTC?** Sunucu Türkiye'de, geliştirici Almanya'da, kullanıcı ABD'de olabilir.
+Herkes kendi saat diliminde log okursa karışır. UTC tek standart — herkese göre
+dönüştürülebilir.
+
+**Neden `record.created` ve `datetime.now()` değil?** `record.created` logun gerçek
+oluşturulma anını veriyor (Python'un log sistemi bunu otomatik tutuyor). `datetime.now()`
+ise format anını verir — arada milisaniyelik fark olabilir, sıralama bozulur.
+
+```python
+            "level": record.levelname,
+            "logger": record.name,               # ← "src.sandbox.manager" gibi
+            "msg": record.getMessage(),
+        }
+```
+
+**Neden `record.name`?** Bu, logu yazan modülün tam adı. `logger = logging.getLogger(__name__)`
+dediğimizde `__name__` otomatik olarak `src.sandbox.manager` gibi olur. Hangi dosyadan
+geldiğini hemen görürsün.
+
+```python
+        # Session correlation
+        sid = SessionContext.get()
+        if sid:
+            log_entry["session_id"] = sid         # ← Hangi kullanıcının logu?
+```
+
+`SessionContext`'ten session_id'yi alıyoruz. Yoksa eklemiyoruz — gereksiz `"session_id": ""`
+JSON'ı şişirmesin.
+
+```python
+        # Extra fields (audit logları için)
+        for key in ("tool_name", "action", "blocked", "execute_num", "duration_s"):
+            val = getattr(record, key, None)
+            if val is not None:
+                log_entry[key] = val
+```
+
+**Neden bu özel alanlar?** Audit loglarında `_audit.info("tool_blocked", extra={"tool_name": "execute", "action": "pip_install", "blocked": True})`
+şeklinde ek bilgi gönderiyoruz. Formatter bunları JSON'a ekliyor. Böylece log satırından
+doğrudan "hangi araç engellendi, neden engellendi, kaçıncı execute'du" bilgisini çekebilirsin.
+
+```python
+        if record.exc_info and record.exc_info[0] is not None:
+            log_entry["exc"] = self.formatException(record.exc_info)
+```
+
+Hata varsa stack trace'i de JSON'a ekle. `jq` ile filtreleme yapabilirsin:
+`cat app.log | jq 'select(.exc != null)'` → sadece hatalı logları göster.
+
+```python
+        return json.dumps(log_entry, ensure_ascii=False, default=str)
+```
+
+**Neden `ensure_ascii=False`?** Türkçe karakterler ("ö", "ü", "ş") ASCII'de yok.
+`ensure_ascii=True` olsa `\u00f6` gibi escape'ler yazılır — okunmaz. `False` ile
+doğrudan UTF-8 yazılır.
+
+**Neden `default=str`?** Bazen log'a `datetime` veya `Path` nesnesi düşebilir. `json.dumps`
+bunları serialize edemez. `default=str` ile "en kötü ihtimalle string'e çevir" diyoruz.
 
 ### 2.3 `setup_logging()` — Üç Katmanlı Log Sistemi
 
-🔗 [**src/utils/logging_config.py:95-147** — setup_logging fonksiyonu](https://github.com/CYBki/code-execution-agent/blob/main/src/utils/logging_config.py#L95-L147)
+🔗 [**src/utils/logging_config.py:95-147** — setup_logging](https://github.com/CYBki/code-execution-agent/blob/main/src/utils/logging_config.py#L95-L147)
 
-Üç handler var:
+```python
+def setup_logging(log_level: int = logging.INFO):
+    os.makedirs(_LOG_DIR, exist_ok=True)       # ← logs/ dizini yoksa oluştur
 
-| Handler | Dosya | Seviye | Format |
-|---------|-------|--------|--------|
-| Console | stdout | INFO+ | İnsan-okunur (geliştirme) |
-| app.log | `logs/app.log` | INFO+ | JSON (10MB × 5 rotasyon) |
-| app_error.log | `logs/app_error.log` | WARNING+ | JSON (10MB × 5 rotasyon) |
+    root = logging.getLogger()
+    root.setLevel(log_level)
+
+    root.handlers.clear()                       # ← KRİTİK!
+```
+
+**Neden `handlers.clear()`?** Streamlit her sayfayı yeniden çalıştırıyor (rerun).
+`clear()` yapmazsak her rerun'da yeni handler eklenir → aynı log 2x, 3x, 10x tekrar
+yazar. Bu çok yaygın bir Streamlit tuzağı.
+
+```python
+    # Console handler — geliştirici dostu
+    console = logging.StreamHandler()
+    if os.environ.get("LOG_JSON", "").strip() in ("1", "true"):
+        console.setFormatter(json_fmt)          # ← Production: JSON
+    else:
+        console.setFormatter(human_fmt)         # ← Dev: "2026-04-14 [sandbox] INFO: ..."
+```
+
+**Neden iki format?** Geliştirme sırasında JSON okumak zor. İnsan-okunur format daha hızlı
+debug sağlıyor. Production'da ise Grafana/ELK gibi araçlar JSON bekliyor.
+
+```python
+    # File handler: tüm loglar (10MB × 5 rotasyon)
+    all_handler = RotatingFileHandler(
+        os.path.join(_LOG_DIR, "app.log"),
+        maxBytes=10 * 1024 * 1024,             # ← 10MB olunca yeni dosyaya geç
+        backupCount=5,                          # ← En fazla 5 eski dosya tut
+        encoding="utf-8",
+    )
+```
+
+**Neden `RotatingFileHandler`?** Sıradan `FileHandler` dosyayı sonsuza kadar büyütür.
+24 saat sonra 2GB log dosyası olabilir — disk dolar. Rotation ile en fazla
+10MB × 6 = 60MB disk kullanımı garanti.
+
+**Neden `backupCount=5`?** 5 yedek = son ~60MB log. Hata araştırması için yeterli,
+disk israfı yok. Daha fazla gerekirse log aggregator (ELK, Grafana Loki) kullan.
+
+```python
+    # Sadece hatalar (WARNING+)
+    err_handler = RotatingFileHandler(
+        os.path.join(_LOG_DIR, "app_error.log"),
+        ...
+    )
+    err_handler.setLevel(logging.WARNING)
+```
+
+**Neden ayrı hata dosyası?** `app.log` her şeyi içeriyor (INFO, WARNING, ERROR).
+Sadece hataları görmek istediğinde 100,000 satırlık dosyada `grep` yapmak yerine
+doğrudan `app_error.log`'a bak — çok daha hızlı.
 
 ### 2.4 `get_audit_logger()` — Araç Denetim İzi
 
 🔗 [**src/utils/logging_config.py:150-169** — Audit logger](https://github.com/CYBki/code-execution-agent/blob/main/src/utils/logging_config.py#L150-L169)
 
-Her araç çağrısı (execute, parse_file, vb.) ayrı bir `audit.log` dosyasına yazılıyor.
-`propagate = False` ayarı sayesinde audit logları `app.log`'a düşmüyor — bağımsız
-analiz yapabilirsin.
+```python
+def get_audit_logger() -> logging.Logger:
+    audit = logging.getLogger("audit")
+    if not audit.handlers:                      # ← İlk çağrıda kur, sonra yeniden kurma
+        ...
+        audit.propagate = False                 # ← KRİTİK!
+    return audit
+```
 
-> 💡 **Neden ayrı audit log?** Bir kullanıcının kaç execute çağrısı yaptığını,
-> hangilerinin engellendiğini görmek istediğinde `app.log`'u grep'lemek yerine
-> doğrudan `audit.log`'a bakarsın. `jq` ile anında analiz yapabilirsin.
+**Neden `propagate = False`?** Python'da loggerlar ağaç yapısında. `"audit"` logger'ı
+logladığında, parent olan root logger'a da gider → `app.log`'a da yazılır. Biz bunu
+istemiyoruz — audit logları ayrı dosyada kalmalı. `propagate = False` ile parent'a
+iletmeyi kapatıyoruz.
+
+**Neden ayrı audit log?** `app.log`'da uygulama logları + audit logları karışır.
+Audit analizi yapmak istediğinde:
+```bash
+cat audit.log | jq 'select(.blocked == true)' | wc -l   # Kaç araç engellendi?
+cat audit.log | jq 'select(.tool_name == "execute")' | wc -l  # Kaç execute çağrıldı?
+```
+
+`app.log`'dan bunu yapmak çok zor çünkü arada binlerce unrelated log var.
 
 ---
 
 ## Bölüm 3: Veritabanı Katmanı
 
-Kullanıcı sayfayı yenilediğinde konuşma geçmişi kaybolmasın diye bir veritabanına
-ihtiyacımız var.
+Kullanıcı sayfayı yenilediğinde konuşma geçmişi kaybolmasın. Dosyalar kaybolmasın.
+Bunun için veritabanına ihtiyacımız var.
 
-### 3.1 Çift Backend Desteği
+### 3.1 Çift Backend: SQLite + PostgreSQL
 
-🔗 [**src/storage/db.py:54-84** — Bağlantı ve yardımcı fonksiyonlar](https://github.com/CYBki/code-execution-agent/blob/main/src/storage/db.py#L54-L84)
+🔗 [**src/storage/db.py:54-84** — Bağlantı yönetimi](https://github.com/CYBki/code-execution-agent/blob/main/src/storage/db.py#L54-L84)
 
 ```python
 def _get_conn():
@@ -189,81 +313,147 @@ def _get_conn():
         return sqlite3.connect(DB_PATH, check_same_thread=False)
 ```
 
-`DATABASE_URL` varsa PostgreSQL, yoksa SQLite. İki veritabanının SQL farklılıklarını
-iki küçük fonksiyon hallediyor:
+**Neden `check_same_thread=False`?** SQLite normalde "ben sadece beni oluşturan thread'den
+erişilebilirim" diyor. Ama Streamlit'te birden fazla thread var (UI thread, ajan thread,
+ön-ısıtma thread). `check_same_thread=False` ile bu kısıtlamayı kaldırıyoruz.
+
+**Bu tehlikeli değil mi?** Evet, SQLite aynı anda iki write yapılırsa kilitlenebilir.
+Ama bizim kullanım senaryomuzda her oturum genellikle tek bir ajan çalıştırıyor — eşzamanlı
+write nadir. Production'da PostgreSQL kullanılması tam da bu yüzden öneriliyor.
 
 ```python
 def _ph(n: int = 1) -> str:
     """Placeholder: %s (PostgreSQL) veya ? (SQLite)"""
     return ", ".join(["%s"] * n) if _is_pg() else ", ".join(["?"] * n)
+```
 
+**Neden bu yardımcı fonksiyon?** SQL'de parametre placeholder'ları veritabanına göre değişiyor:
+- SQLite: `INSERT INTO t VALUES (?, ?, ?)`
+- PostgreSQL: `INSERT INTO t VALUES (%s, %s, %s)`
+
+Her SQL sorgusunda `if _is_pg(): "%s" else "?"` yazmak yerine `_ph(3)` diyoruz. DRY prensibi.
+
+```python
 def _now_expr() -> str:
-    """Şimdiki zaman: NOW() (PG) veya datetime('now') (SQLite)"""
     return "NOW()" if _is_pg() else "datetime('now')"
 ```
 
-> 💡 **Neden ikisi birden?** Lokal geliştirmede SQLite yeterli — sıfır kurulum.
-> Production'da PostgreSQL — çok kullanıcılı, yedeklenebilir, ölçeklenebilir.
-> Aynı kod ikisinde de çalışıyor.
+Aynı mantık — `NOW()` PostgreSQL'e özel, SQLite `datetime('now')` kullanıyor.
 
-### 3.2 Veritabanı Şeması
+> 💡 **Neden ORM (SQLAlchemy) kullanmadık?** Bu proje için overkill. 3 tablo, ~10 sorgu var.
+> SQLAlchemy eklemek: dependency artışı, migration sistemi, session yönetimi... Basit SQL
+> yeterli. "En basit çözüm en iyi çözümdür" — YAGNI prensibi.
 
-🔗 [**src/storage/db.py:96-170** — init_db() ve tablo tanımları](https://github.com/CYBki/code-execution-agent/blob/main/src/storage/db.py#L96-L170)
+### 3.2 Şema Tasarımı
 
-Üç tablo:
+🔗 [**src/storage/db.py:96-170** — init_db ve tablo tanımları](https://github.com/CYBki/code-execution-agent/blob/main/src/storage/db.py#L96-L170)
 
+```sql
+-- conversations tablosu
+CREATE TABLE IF NOT EXISTS conversations (
+    session_id TEXT PRIMARY KEY,     -- UUID, her oturumun benzersiz kimliği
+    user_id    TEXT NOT NULL,        -- Kullanıcı kimliği (query param'dan)
+    title      TEXT DEFAULT '',      -- İlk mesajın ilk 80 karakteri
+    created_at ...,
+    updated_at ...
+);
 ```
-conversations          messages               files
-├── session_id (PK)    ├── id (PK)            ├── id (PK)
-├── user_id            ├── session_id (FK)    ├── session_id (FK)
-├── title              ├── role               ├── filename
-├── created_at         ├── content            ├── size
-└── updated_at         ├── steps (JSON)       ├── file_data (BLOB)
-                       └── created_at         └── created_at
+
+**Neden `session_id` PK ve auto-increment değil?** UUID'yi Python tarafında üretiyoruz
+(`str(uuid4())`). Bunu URL'de, log'da, sandbox'ta kullanıyoruz. Auto-increment integer
+olsa bu ID'yi her yerde taşımak zorunda kalırdık ve DB'ye gitmeden ID üretemezdik.
+
+```sql
+-- messages tablosu
+CREATE TABLE IF NOT EXISTS messages (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    role       TEXT NOT NULL,        -- "user" veya "assistant"
+    content    TEXT DEFAULT '',
+    steps      TEXT DEFAULT '[]',    -- JSON: araç çağrıları
+    created_at ...
+);
 ```
 
-`steps` kolonu JSON olarak saklanıyor — ajan hangi araçları çağırdı, ne girdi verdi,
-ne çıktı aldı. Bu sayede geçmiş konuşmayı yüklerken araç çağrılarını da geri
-gösterebiliyoruz.
+**Neden `steps` JSON olarak?** Ajan her turda farklı sayıda araç çağırıyor (2-8 arası).
+Her araç çağrısının adı, girdisi, çıktısı var. Bunu normalize etseydik:
+- `tool_calls` tablosu, `tool_inputs` tablosu, `tool_outputs` tablosu...
+- JOIN'ler, karmaşık sorgular, performans sorunları
 
-### 3.3 CRUD Operasyonları
+JSON ile tek kolonda saklıyoruz. Okurken `json.loads()` ile parse ediyoruz. Basit, hızlı,
+yeterli.
 
-🔗 [**src/storage/db.py:173-355** — save/load/delete fonksiyonları](https://github.com/CYBki/code-execution-agent/blob/main/src/storage/db.py#L173-L355)
+```sql
+-- files tablosu
+CREATE TABLE IF NOT EXISTS files (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    filename   TEXT NOT NULL,
+    size       INTEGER DEFAULT 0,
+    file_data  BLOB,               -- ← Dosyanın kendisi!
+    created_at ...
+);
+```
 
-Temel fonksiyonlar:
+**Neden BLOB?** Alternatifler:
+1. **Dosya sistemi:** Dosyayı disk'e yaz, yolunu DB'ye kaydet → Sunucu değiştiğinde dosyalar kaybolur
+2. **S3/Object storage:** Ölçeklenebilir ama ekstra servis → karmaşıklık artışı
+3. **BLOB:** Dosya DB'nin içinde → yedekleme tek komut, taşıma basit
 
-| Fonksiyon | Ne yapıyor? |
-|-----------|-------------|
-| `create_conversation()` | Yeni konuşma oluştur |
-| `save_message()` | Mesajı kaydet (steps JSON olarak) |
-| `load_messages()` | Konuşma geçmişini yükle |
-| `save_files()` | Yüklenen dosyaları DB'ye kaydet (BLOB) |
-| `load_files()` | Dosyaları DB'den geri yükle |
-| `delete_conversation()` | Konuşma + mesajlar + dosyaları sil |
-| `list_conversations()` | Kullanıcının tüm konuşmalarını listele |
+Dosyalar genellikle 1-20MB. SQLite bu boyutları rahat taşıyor. 100MB+ dosyalar için
+S3'e geçmek gerekir ama şu an overkill.
 
-> 🔑 **Anahtar kavram:** Dosyalar BLOB olarak veritabanında saklanıyor. Bu sayede
-> kullanıcı sayfayı yenilediğinde veya geçmiş konuşmaya döndüğünde dosyalar hâlâ mevcut.
+### 3.3 CRUD Operasyonları — Detaylı
+
+🔗 [**src/storage/db.py:173-355** — Tüm CRUD fonksiyonları](https://github.com/CYBki/code-execution-agent/blob/main/src/storage/db.py#L173-L355)
+
+**`save_message()` içindeki önemli detay:**
+
+```python
+def save_message(session_id, role, content, steps=None):
+    steps_json = json.dumps(steps or [], ensure_ascii=False, default=str)
+    # ...
+    cur.execute(f"""
+        INSERT INTO messages (session_id, role, content, steps, created_at)
+        VALUES ({_ph(5)})
+    """, (session_id, role, content, steps_json, ...))
+```
+
+**Neden `ensure_ascii=False`?** Aynı mantık — Türkçe karakterler korunmalı.
+**Neden `default=str`?** `steps` içinde `bytes` veya `datetime` nesnesi olabilir (araç çıktıları).
+Normal `json.dumps` bunları serialize edemez — `default=str` ile string'e çevrilir.
+
+**`save_files()` — dosya boyutu kontrolü:**
+
+```python
+def save_files(session_id, files):
+    for f in files:
+        f.seek(0)
+        data = f.getvalue()         # ← Tüm dosyayı belleğe oku
+        # ... INSERT INTO files ... (data as BLOB)
+```
+
+**Neden `f.seek(0)`?** Streamlit'in `UploadedFile` nesnesi bir stream. Daha önce okunmuşsa
+cursor sonda kalır — tekrar okumak için başa sar. Bu `seek(0)` olmazsa boş bytes alırsın.
+Bu çok yaygın bir bug kaynağı.
 
 ---
 
 ## Bölüm 4: Sandbox Yöneticisi
 
-Burası projenin kalbi. Kullanıcının kodu nerede çalışıyor? İzole bir Docker container
-içinde. Bu bölümde o container'ı yönetiyoruz.
+Burası projenin kalbi. Tüm kullanıcı kodu izole bir Docker container içinde çalışıyor.
 
-### 4.1 Sabitler ve Yardımcı Sınıflar
+### 4.1 Temel Kavram: Kalıcı Kernel (Persistent Kernel)
 
-🔗 [**src/sandbox/manager.py:1-50** — Import'lar, sabitler, regex, result sınıfları](https://github.com/CYBki/code-execution-agent/blob/main/src/sandbox/manager.py#L1-L50)
+🔗 [**src/sandbox/manager.py:1-50** — Sabitler ve yardımcılar](https://github.com/CYBki/code-execution-agent/blob/main/src/sandbox/manager.py#L1-L50)
 
 ```python
 SANDBOX_HOME = "/home/sandbox"
 ```
 
-Tüm dosyalar bu dizinde yaşıyor. Fontlar, kullanıcı dosyaları, üretilen raporlar —
-hepsi `/home/sandbox/` altında.
-
-İki önemli sabit daha:
+Tüm dosyaların yaşadığı dizin. Neden `/home/sandbox/` ve `/tmp/` değil? Docker image'da
+bu dizin WORKDIR olarak ayarlanmış. Kullanıcı dosyaları, fontlar, üretilen raporlar
+hep burada. Tutarlı bir konum — ajan her zaman dosyanın nerede olduğunu biliyor.
 
 ```python
 _PYFILE_RE = re.compile(
@@ -271,164 +461,343 @@ _PYFILE_RE = re.compile(
 )
 ```
 
-Bu regex, `execute.py`'nin ürettiği base64-kodlanmış Python dosya kalıbını tanıyor.
-Eşleşirse → Python kodu, persistent kernel'da çalıştır. Eşleşmezse → shell komutu,
-doğrudan `commands.run()` ile çalıştır.
+**Bu regex ne yapıyor?** `execute.py` Python kodunu şu formata çeviriyor:
+```bash
+printf '%s' 'aW1wb3J0IH...' | base64 -d > /tmp/_run_a1b2c3d4.py && python3 /tmp/_run_a1b2c3d4.py
+```
 
-`_ExecuteResult` ve `_DownloadResult` sınıfları eski arayüzle uyumluluğu sağlıyor —
-araçlar (execute.py, download_file.py) bu sınıfların `.output` ve `.content`
-alanlarını kullanıyor.
+Bu regex o kalıbı tanıyıp base64 kısmını (`group(1)`) ve dosya yolunu (`group(2)`) çıkarıyor.
+Eşleşirse → Python kodu, kalıcı kernel'da çalıştır. Eşleşmezse → shell komutu.
 
-### 4.2 `OpenSandboxBackend` — Kalıcı Kernel
+**Neden bu ayrım önemli?** Kalıcı kernel'da çalışan Python kodundaki değişkenler
+sonraki çağrılarda da yaşıyor. Shell komutu olarak çalışsa her seferinde yeni process
+başlar — değişkenler kaybolur.
 
-🔗 [**src/sandbox/manager.py:52-189** — OpenSandboxBackend sınıfı](https://github.com/CYBki/code-execution-agent/blob/main/src/sandbox/manager.py#L52-L189)
+```python
+class _ExecuteResult:
+    def __init__(self, output: str, exit_code: int = 0):
+        self.output = output
+        self.exit_code = exit_code
+```
 
-Bu sınıf projenin en kritik konseptini barındırıyor: **kalıcı kernel (persistent kernel)**.
+**Neden bu wrapper sınıf?** Proje önce Daytona sandbox kullanıyordu. OpenSandbox'a geçince
+mevcut araçları (execute.py, download_file.py) değiştirmemek için aynı arayüzü sağlayan
+wrapper sınıflar yazdık. `result.output` ve `result.exit_code` her iki backend'de de çalışıyor.
+Adapter pattern — mevcut kodu kırmadan backend değiştirme.
+
+### 4.2 `OpenSandboxBackend` — Asıl İşi Yapan Sınıf
+
+🔗 [**src/sandbox/manager.py:52-189** — OpenSandboxBackend](https://github.com/CYBki/code-execution-agent/blob/main/src/sandbox/manager.py#L52-L189)
 
 ```python
 class OpenSandboxBackend:
     def __init__(self, sandbox, interpreter, py_context):
-        self._sandbox = sandbox
-        self._interpreter = interpreter
-        self._py_context = py_context  # Kalıcı Python çalıştırma bağlamı
+        self._sandbox = sandbox            # Docker container yönetimi
+        self._interpreter = interpreter    # CodeInterpreter API
+        self._py_context = py_context      # KALICI KERNEL BAĞLAMI
 ```
 
-`py_context` bir CodeInterpreter bağlamı. Bu bağlamda çalıştırdığın her Python kodu
-aynı bellek alanını paylaşıyor. Yani:
+**Üç farklı nesne — neden?**
+- `sandbox`: Container'ın kendisi (dosya sistemi, shell komutları)
+- `interpreter`: CodeInterpreter servisi (Python çalıştırma API'si)
+- `py_context`: Belirli bir Python oturumu (değişkenler burada yaşıyor)
+
+Analoji: `sandbox` = bilgisayar, `interpreter` = Python kurulumu, `py_context` = açık
+bir Python REPL penceresi. REPL'de `x = 5` yazarsın, sonra `print(x)` yazarsın → 5 gelir.
+İşte `py_context` o REPL.
+
+#### `execute()` metodu — satır satır
+
+🔗 [**src/sandbox/manager.py:96-155** — execute](https://github.com/CYBki/code-execution-agent/blob/main/src/sandbox/manager.py#L96-L155)
 
 ```python
-# Execute #1: df artık bellekte
-df = pd.read_excel('/home/sandbox/data.xlsx')
-
-# Execute #2: df HÂLÂ bellekte — tekrar okumaya gerek YOK
-result = df.groupby('Category')['Revenue'].sum()
-```
-
-> 🔑 **Anahtar kavram: Kalıcı Kernel.** Değişkenler, import'lar, DataFrame'ler —
-> hepsi `execute()` çağrıları arasında hayatta kalır. Pickle/serialization'a gerek yok.
-> Bu, projenin performansını dramatik şekilde artırıyor.
-
-### 4.3 `execute()` — Python mu, Shell mi?
-
-🔗 [**src/sandbox/manager.py:96-155** — execute metodu](https://github.com/CYBki/code-execution-agent/blob/main/src/sandbox/manager.py#L96-L155)
-
-`execute()` metodunun karar ağacı:
-
-```
-Gelen komut → _PYFILE_RE regex'i eşleşiyor mu?
-  ├─ EVET → base64 decode → codes.run(py_code, context=py_context)  [kalıcı kernel]
-  └─ HAYIR → sandbox.commands.run(command)                          [shell komutu]
-```
-
-Python kodu kalıcı kernel'da çalışıyor (değişkenler yaşar), shell komutları ise
-doğrudan container'da çalışıyor (rm, echo, cat gibi).
-
-**Timeout mekanizması:**
-
-```python
-pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-future = pool.submit(self._interpreter.codes.run, py_code, context=self._py_context)
-try:
-    result = future.result(timeout=timeout)  # 180 saniye
-except concurrent.futures.TimeoutError:
-    self._reset_context()  # Takılan kernel'ı sıfırla
-```
-
-`codes.run()` kendi içinde timeout desteklemiyor. Biz `ThreadPoolExecutor` ile
-sarmalayıp dışarıdan timeout veriyoruz. Timeout olursa `_reset_context()` yeni bir
-kernel bağlamı oluşturuyor — takılan bağlamı silip temiz bir başlangıç yapıyor.
-
-### 4.4 `_reset_context()` — Takılan Kernel'ı Kurtarma
-
-🔗 [**src/sandbox/manager.py:75-94** — _reset_context metodu](https://github.com/CYBki/code-execution-agent/blob/main/src/sandbox/manager.py#L75-L94)
-
-```python
-def _reset_context(self):
-    old_id = getattr(self._py_context, "id", None)
-    if old_id:
+    def execute(self, command: str, timeout: int = 180) -> _ExecuteResult:
         try:
-            self._interpreter.codes.delete_context(old_id)
-        except Exception:
-            pass  # Takılı bağlam silinmeyebilir — sorun değil
-    self._py_context = self._interpreter.codes.create_context(SupportedLanguage.PYTHON)
+            m = _PYFILE_RE.search(command)    # ← Python kodu mu kontrol et
+            if m:
+                b64 = m.group(1).strip()
+                py_code = base64.b64decode(b64).decode()   # ← Base64'ten çöz
 ```
 
-Eski bağlamı sil (başarısız olabilir, sorun değil), yenisini oluştur. Sonraki
-`execute()` çağrıları bu temiz bağlamda çalışacak.
+**Neden `search` ve `match` değil?** `match` sadece string'in başında arar. Ama komut
+`printf '%s' '...' | base64 -d > ...` ile başlıyor — öncesinde boşluk veya başka
+karakterler olabilir. `search` string'in herhangi bir yerinde eşleşme arar.
 
-### 4.5 `SandboxManager` — Yaşam Döngüsü Yönetimi
+```python
+                pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                future = pool.submit(
+                    self._interpreter.codes.run,
+                    py_code, context=self._py_context,
+                )
+                try:
+                    result = future.result(timeout=timeout)    # ← 180 saniye bekle
+```
 
-🔗 [**src/sandbox/manager.py:192-346** — SandboxManager sınıfı](https://github.com/CYBki/code-execution-agent/blob/main/src/sandbox/manager.py#L192-L346)
+**Neden `ThreadPoolExecutor` ile sarmalıyoruz?** `codes.run()` senkron bir çağrı ve
+kendi timeout mekanizması yok. Büyük bir dosya işlemi sonsuz süre takılabilir.
+`future.result(timeout=180)` ile "180 saniye içinde bitmezse TimeoutError fırlat" diyoruz.
 
-Bu sınıf sandbox'un tüm yaşam döngüsünü yönetiyor:
+**Neden `max_workers=1`?** Aynı kernel bağlamında aynı anda iki kod çalıştıramazsın
+(race condition). Tek worker yeterli.
 
-**Oluşturma:**
+```python
+                except concurrent.futures.TimeoutError:
+                    future.cancel()
+                    pool.shutdown(wait=False)       # ← wait=True YAPMA!
+```
+
+**Neden `wait=False`?** `pool.shutdown(wait=True)` takılan thread'in bitmesini bekler —
+ama thread zaten timeout oldu, bitmeyecek! `wait=False` ile pool'u bırakıyoruz.
+Thread arka planda ölecek.
+
+Yorumda da yazıyor: "Do NOT use 'with' block — pool.__exit__ calls shutdown(wait=True)
+which blocks until the hung thread finishes." `with` kullanırsan sonsuz bekleme.
+
+```python
+                    self._reset_context()           # ← Takılan kernel'ı kurtarma
+                    return _ExecuteResult(
+                        output=f"Error: Code execution timed out after {timeout}s...",
+                        exit_code=1,
+                    )
+```
+
+Timeout sonrası eski kernel bağlamı "meşgul" durumda kalıyor. Yeni bir bağlam oluşturuyoruz.
+
+```python
+                else:
+                    pool.shutdown(wait=False)        # ← Başarılıysa da beklemeden kapat
+
+                output = result.text or ""
+                if result.error:
+                    err_msg = getattr(result.error, "value", str(result.error))
+                    output = output + (f"\n{err_msg}" if output else err_msg)
+                exit_code = 1 if result.error else 0
+```
+
+**Neden `getattr(result.error, "value", str(result.error))`?** `result.error` bazen
+string, bazen bir hata nesnesi (`.value` alanı olan). İkisini de ele almak için
+`getattr` ile güvenli erişim.
+
+```python
+            # Shell command path
+            opts = RunCommandOpts(timeout=timedelta(seconds=timeout))
+            result = self._sandbox.commands.run(command, opts=opts)
+```
+
+Python kodu değilse (regex eşleşmezse), doğrudan shell komutu olarak çalıştır.
+`rm -f /tmp/...`, `echo CLEAN_OK` gibi komutlar buradan geçiyor.
+
+#### `_reset_context()` — Takılan Kernel'ı Kurtarma
+
+🔗 [**src/sandbox/manager.py:75-94** — _reset_context](https://github.com/CYBki/code-execution-agent/blob/main/src/sandbox/manager.py#L75-L94)
+
+```python
+    def _reset_context(self):
+        try:
+            old_id = getattr(self._py_context, "id", None)
+            if old_id:
+                try:
+                    self._interpreter.codes.delete_context(old_id)
+                except Exception:
+                    pass    # ← Silme başarısız olabilir — sorun değil
+```
+
+**Neden `try/except pass`?** Takılı bağlam "session is busy" durumunda. Silme isteği
+de timeout olabilir veya reddedilebilir. Ama zaten yeni bağlam oluşturacağız — eski
+silinmese bile sorun yok, garbage collection halleder.
+
+```python
+            self._py_context = self._interpreter.codes.create_context(
+                SupportedLanguage.PYTHON
+            )
+```
+
+Yeni, temiz bir Python oturumu. Eski değişkenler kayboldu ama en azından takılma
+sona erdi.
+
+#### `upload_files()` ve `download_files()`
+
+🔗 [**src/sandbox/manager.py:157-189** — Upload/Download](https://github.com/CYBki/code-execution-agent/blob/main/src/sandbox/manager.py#L157-L189)
+
+```python
+    def upload_files(self, files: list) -> list:
+        class _Ok:
+            error = None
+        class _Err:
+            def __init__(self, msg):
+                self.error = msg
+```
+
+**Neden bu iç sınıflar?** Eski Daytona backend'inin döndüğü sonuç formatını taklit
+ediyorlar. `_Ok` = başarılı yükleme, `_Err` = başarısız. Mevcut kodda `if resp.error:`
+kontrolü var — bu iç sınıflar o kontrolü çalışır tutyor.
+
+```python
+        entries = []
+        for path, data in files:
+            if isinstance(data, str):
+                data = data.encode()              # ← String'i bytes'a çevir
+            entries.append(WriteEntry(path=path, data=data))
+        self._sandbox.files.write_files(entries)
+```
+
+**Neden `isinstance(data, str)` kontrolü?** Bazen veri string olarak geliyor (metin
+dosyaları), bazen bytes (Excel, PDF). `write_files` bytes bekliyor — string gelirse
+encode ediyoruz.
+
+### 4.3 `SandboxManager` — Yaşam Döngüsü
+
+🔗 [**src/sandbox/manager.py:192-346** — SandboxManager](https://github.com/CYBki/code-execution-agent/blob/main/src/sandbox/manager.py#L192-L346)
+
+```python
+class SandboxManager:
+    def __init__(self):
+        self._backend: OpenSandboxBackend | None = None
+        self._sandbox: SandboxSync | None = None
+        self._interpreter: CodeInterpreterSync | None = None
+        self._py_context = None
+        self._packages_ready = threading.Event()    # ← Senkronizasyon
+        self._create_lock = threading.Lock()         # ← Yarış koşulu koruması
+```
+
+**Neden `threading.Event()`?** Sandbox oluşturma arka plan thread'inde (~5 saniye).
+Ana thread "sandbox hazır mı?" diye sormak istiyor. `Event` tam bunu sağlıyor:
+- Arka plan thread'i: `self._packages_ready.set()` → "hazırım!"
+- Ana thread: `self._packages_ready.wait(timeout=30)` → "30 saniye bekle, hazır olmazsa devam et"
+
+**Neden `threading.Lock()`?** İki thread aynı anda `get_or_create_sandbox()` çağırabilir
+(Streamlit rerun + ön-ısıtma thread). Lock olmadan iki sandbox oluşturulabilir — kaynak
+israfı ve bug.
+
+#### `_create_new_sandbox()` — Sandbox Doğum Anı
 
 🔗 [**src/sandbox/manager.py:222-269** — _create_new_sandbox](https://github.com/CYBki/code-execution-agent/blob/main/src/sandbox/manager.py#L222-L269)
 
 ```python
-sandbox = SandboxSync.create(
-    "agentic-sandbox:v1",                              # Docker image
-    entrypoint=["/opt/opensandbox/code-interpreter.sh"], # CodeInterpreter başlat
-    env={"PYTHON_VERSION": "3.11"},
-    timeout=timedelta(hours=2),                         # 2 saat TTL
-)
-interpreter = CodeInterpreterSync.create(sandbox)
-py_context = interpreter.codes.create_context(SupportedLanguage.PYTHON)
+    def _create_new_sandbox(self, thread_id: str) -> OpenSandboxBackend:
+        sandbox = SandboxSync.create(
+            "agentic-sandbox:v1",                    # ← Özel Docker image
+            entrypoint=["/opt/opensandbox/code-interpreter.sh"],
+            env={"PYTHON_VERSION": "3.11"},
+            timeout=timedelta(hours=2),              # ← 2 saat ömür
+        )
 ```
 
-Sandbox oluşturulduktan sonra `publish_html()` helper'ı kernel'a enjekte ediliyor:
+**Neden `"agentic-sandbox:v1"`?** Bu özel bir Docker image. İçinde tüm Python paketleri
+(pandas, matplotlib, duckdb, weasyprint, vb.) önceden kurulu. Normal bir Python image
+kullansak her sandbox'ta `pip install` gerekir — 35 saniye bekleme.
+Önceden kurulu image ile sandbox 3-5 saniyede hazır.
 
-🔗 [**src/sandbox/manager.py:247-258** — publish_html enjeksiyonu](https://github.com/CYBki/code-execution-agent/blob/main/src/sandbox/manager.py#L247-L258)
+**Neden `timeout=timedelta(hours=2)`?** Kullanıcı oturumu 2 saatten uzun sürmemeli.
+2 saat sonra sandbox otomatik silinir — zombi container'lar birikmiyor.
 
 ```python
-_INIT_CODE = (
-    "def publish_html(html_str):\n"
-    "    with open('/home/sandbox/__dashboard__.html', 'w', encoding='utf-8') as f:\n"
-    "        f.write(html_str)\n"
-    "    print('__PUBLISH_HTML__')\n"
-)
-interpreter.codes.run(_INIT_CODE, context=py_context)
+        interpreter = CodeInterpreterSync.create(sandbox)
+        py_context = interpreter.codes.create_context(SupportedLanguage.PYTHON)
 ```
 
-Bu fonksiyon kernel'ın içinde yaşıyor. Ajan `publish_html(html)` çağırdığında HTML
-dosyaya yazılıyor ve `__PUBLISH_HTML__` marker'ı basılıyor. `execute.py` bu marker'ı
+**İki adımlı oluşturma — neden?**
+1. `CodeInterpreterSync.create(sandbox)` → Sandbox'taki CodeInterpreter servisine bağlan
+2. `create_context(PYTHON)` → Yeni bir Python REPL oturumu başlat
+
+Tek adımda yapılamıyor çünkü bir sandbox'ta birden fazla dil bağlamı olabilir (Python,
+JavaScript, vb.). Biz sadece Python kullanıyoruz ama API genel.
+
+```python
+        # publish_html() helper'ı kernel'a enjekte et
+        _INIT_CODE = (
+            "def publish_html(html_str):\n"
+            "    \"\"\"Write HTML dashboard to file for automatic rendering in the UI.\"\"\"\n"
+            "    with open('/home/sandbox/__dashboard__.html', 'w', encoding='utf-8') as f:\n"
+            "        f.write(html_str)\n"
+            "    print('__PUBLISH_HTML__')\n"
+        )
+        interpreter.codes.run(_INIT_CODE, context=py_context)
+```
+
+**Neden bu fonksiyonu kernel'a enjekte ediyoruz?** Ajan dashboard oluşturduğunda HTML'i
+doğrudan Streamlit'e gönderemez (farklı thread, farklı process). Ama kernel'daki bir
+fonksiyon HTML'i dosyaya yazabilir ve stdout'a marker basabilir. `execute.py` bu marker'ı
 yakalayıp HTML'i artifact store'a yönlendiriyor.
 
-**Temizleme (Yeni Konuşma):**
+**Akış:**
+1. Ajan: `publish_html("<div>Dashboard</div>")`
+2. Kernel: HTML'i `/home/sandbox/__dashboard__.html`'e yaz
+3. Kernel: stdout'a `__PUBLISH_HTML__` bas
+4. `execute.py`: Marker'ı yakala → dosyayı oku → `ArtifactStore.add_html()` → dosyayı sil
+5. Stream bitince: `store.pop_html()` → `components.html()` → iframe'de göster
+
+```python
+        self._packages_ready.set()     # ← "Hazırım!" sinyali
+```
+
+#### `clean_workspace()` — Yeni Konuşma için Sıfırlama
 
 🔗 [**src/sandbox/manager.py:296-324** — clean_workspace](https://github.com/CYBki/code-execution-agent/blob/main/src/sandbox/manager.py#L296-L324)
 
 ```python
-def clean_workspace(self):
-    # Dosyaları temizle
-    self._backend.execute("rm -rf /home/sandbox/* 2>/dev/null; ...")
-    # Kernel bağlamını sıfırla (değişkenler sıfırlanır)
-    self._interpreter.codes.delete_context(self._py_context.id)
-    self._py_context = self._interpreter.codes.create_context(SupportedLanguage.PYTHON)
+    def clean_workspace(self):
+        # 1. Dosyaları temizle
+        self._backend.execute(
+            f"rm -rf {SANDBOX_HOME}/* 2>/dev/null; "
+            "rm -rf /tmp/_run_*.py 2>/dev/null; "
+            "echo CLEAN_OK"
+        )
 ```
 
-Container'ı öldürmüyoruz — sadece dosyaları siliyor ve kernel bağlamını sıfırlıyoruz.
-Yeni container oluşturmak ~5 saniye, bağlam sıfırlamak ~0.1 saniye. Büyük fark.
+**Neden `2>/dev/null`?** Dosya yoksa `rm` hata basar — ama bu normal, beklenen durum.
+Hata çıktısını `/dev/null`'a yönlendirerek log'u kirletmiyoruz.
 
-> 💡 **Neden container'ı yeniden oluşturmuyoruz?** Sandbox oluşturma ~5 saniye sürüyor.
-> "Yeni Konuşma" tıklamasında 5 saniye beklemek kötü UX. Bunun yerine aynı container'ı
-> tutup sadece dosyaları ve kernel'ı sıfırlıyoruz — çok daha hızlı.
+**Neden `echo CLEAN_OK`?** Temizlik başarılı mı kontrol etmek için. Çıktıda `CLEAN_OK`
+varsa her şey temiz.
+
+```python
+        # 2. Kernel bağlamını sıfırla
+        if self._interpreter is not None:
+            try:
+                self._interpreter.codes.delete_context(self._py_context.id)
+            except Exception:
+                pass
+            self._py_context = self._interpreter.codes.create_context(
+                SupportedLanguage.PYTHON
+            )
+            self._backend._py_context = self._py_context
+```
+
+**Neden kernel'ı sıfırlıyoruz?** Önceki konuşmadaki `df`, `m`, `plt` gibi değişkenler
+hâlâ bellekte. Yeni konuşmada eski verilerle karışmamalı. Bağlamı silip yenisini
+oluşturarak temiz bir başlangıç sağlıyoruz.
+
+**Neden `self._backend._py_context = self._py_context`?** Backend nesnesi eski bağlama
+referans tutuyor. Yeni bağlamı backend'e de iletmemiz lazım — yoksa backend eski (silinmiş)
+bağlama kod göndermeye çalışır.
+
+> 💡 **Container'ı neden öldürmüyoruz?** Yeni container = ~5 saniye bekleme. Bağlam
+> sıfırlama = ~0.1 saniye. 50x daha hızlı. "Yeni Konuşma" butonuna basan kullanıcı
+> 5 saniye beklemek istemez.
 
 ---
 
 ## Bölüm 5: Artifact Store
 
-Şimdi kritik bir sorunumuz var: Ajan araçları (execute, generate_html, vb.)
-**thread pool** içinde çalışıyor. Ama Streamlit UI **ana thread'de**. Bu iki thread
-nasıl konuşacak?
+Şimdi kritik bir mimari sorun: **Ajan araçları thread pool'da çalışıyor, UI ana thread'de.
+Nasıl konuşacaklar?**
 
-### 5.1 Problem: Thread Güvenliği
+### 5.1 Problem Detayı
 
-Streamlit'in `st.session_state`'i thread-safe değil. Ajan thread'inden
-`st.session_state["downloads"].append(...)` yapamazsın — race condition olur.
+```
+Ana Thread (Streamlit):          Ajan Thread (LangChain):
+  render_chat()                    execute() → PDF üret
+  st.download_button(???)         download_file() → PDF bytes'ı var
+                                  → st.session_state["downloads"] = ???
+                                    ↑ PATLAMA! Thread-safe değil!
+```
 
-### 5.2 Çözüm: `ArtifactStore`
+Streamlit'in `st.session_state`'i thread-safe değil. Ajan thread'inden erişirsen:
+- En iyi ihtimal: Veri yarışı, bazen çalışır bazen çalışmaz
+- En kötü ihtimal: Deadlock, uygulama donar
+
+### 5.2 Çözüm: Lock Korumalı Global Store
 
 🔗 [**src/tools/artifact_store.py** — Tam dosya (89 satır)](https://github.com/CYBki/code-execution-agent/blob/main/src/tools/artifact_store.py)
 
@@ -436,41 +805,57 @@ Streamlit'in `st.session_state`'i thread-safe değil. Ajan thread'inden
 class ArtifactStore:
     def __init__(self):
         self._lock = threading.Lock()
-        self._pending_downloads: list[dict] = []
-        self._pending_charts: list[dict] = []
+        self._pending_downloads: list[dict[str, Any]] = []
+        self._pending_charts: list[dict[str, Any]] = []
         self._pending_html: list[str] = []
+```
 
-    def add_download(self, file_bytes, filename, path=""):
+**Neden `threading.Lock()`?** Aynı anda iki thread (execute + generate_html aynı anda
+çağrılabilir) listeye yazmaya çalışırsa veri bozulur. Lock ile "aynı anda sadece bir
+thread yazabilir" garantisi sağlıyoruz.
+
+```python
+    def add_download(self, file_bytes: bytes, filename: str, path: str = "") -> None:
         with self._lock:
+            # Dedup: aynı dosya adı zaten varsa ekleme
             if any(d["filename"] == filename for d in self._pending_downloads):
-                return  # Dedup: aynı dosya zaten beklemede
-            self._pending_downloads.append({...})
+                return
+            self._pending_downloads.append({
+                "bytes": file_bytes,
+                "filename": filename,
+                "path": path,
+            })
+```
 
-    def pop_downloads(self):
+**Neden dedup kontrolü?** Ajan bazen aynı dosyayı iki kez indirmeye çalışıyor (retry
+sonrası veya correction loop'ta). İki aynı download butonu göstermek kötü UX.
+
+**Neden `with self._lock`?** `with` sözdizimi otomatik olarak lock'u alır ve blok
+bittiğinde (hata olsa bile) serbest bırakır. Manuel `self._lock.acquire()` /
+`self._lock.release()` kullansak, hata durumunda lock asla serbest kalmaz → deadlock.
+
+```python
+    def pop_downloads(self) -> list[dict[str, Any]]:
         with self._lock:
-            items = self._pending_downloads[:]
-            self._pending_downloads.clear()
+            items = self._pending_downloads[:]     # ← Kopya al
+            self._pending_downloads.clear()         # ← Orijinali temizle
             return items
 ```
 
-**Akış:**
+**Neden kopyalayıp temizliyoruz?** Bu "consume" pattern'i. Ana thread artifact'ları
+alıp render ettikten sonra store'da kalmamalı — yoksa sayfa yenilendiğinde aynı
+download butonları tekrar gösterilir.
 
-```
-Ajan thread'i:                    Streamlit thread'i:
-  execute() → PDF üret
-  download_file()
-    → ArtifactStore.add_download()
-                                  (stream bittikten sonra)
-                                    → store.pop_downloads()
-                                    → st.download_button() render et
-```
+**Neden `[:]` ile kopya?** `items = self._pending_downloads` desek referans kopyalanır.
+Sonra `clear()` çağırdığımızda `items` da boşalır çünkü aynı listeyi gösteriyorlar.
+`[:]` yeni bir liste oluşturur.
 
-### 5.3 Per-Session Store Yönetimi
+### 5.3 Per-Session Store — Neden Global Ama Session-Scoped?
 
-🔗 [**src/tools/artifact_store.py:73-89** — Global store yönetimi](https://github.com/CYBki/code-execution-agent/blob/main/src/tools/artifact_store.py#L73-L89)
+🔗 [**src/tools/artifact_store.py:73-89** — Global yönetim](https://github.com/CYBki/code-execution-agent/blob/main/src/tools/artifact_store.py#L73-L89)
 
 ```python
-_stores: dict[str, ArtifactStore] = {}
+_stores: dict[str, ArtifactStore] = {}     # session_id → store
 _stores_lock = threading.Lock()
 
 def get_store(session_id: str) -> ArtifactStore:
@@ -480,159 +865,360 @@ def get_store(session_id: str) -> ArtifactStore:
         return _stores[session_id]
 ```
 
-Her oturumun kendi store'u var. `_stores_lock` ile store oluşturma da thread-safe.
-Oturum sıfırlandığında `release_store()` ile temizleniyor.
+**Neden modül seviyesinde global?** Araçlar factory fonksiyonlarla oluşturuluyor.
+Factory fonksiyon `session_id`'yi closure'da tutuyor. Araç çağrıldığında
+`get_store(session_id)` ile kendi oturumunun store'una erişiyor.
 
-> 💡 **Neden global singleton?** Ajan araçları factory fonksiyonlarla oluşturuluyor.
-> Her aracın `session_id`'si var. `get_store(session_id)` ile kendi oturumunun
-> store'una erişiyor. Streamlit tarafı da aynı `session_id` ile erişiyor. İkisi
-> aynı nesneye ulaşıyor ama `threading.Lock` sayesinde race condition yok.
+**Neden `_stores_lock`?** `_stores` dict'ine aynı anda iki thread yeni session
+eklemeye çalışabilir. `dict` Python'da thread-safe değil (CPython'da GIL var ama
+güvenilmez). Lock ile güvence altına alıyoruz.
+
+```python
+def release_store(session_id: str) -> None:
+    with _stores_lock:
+        _stores.pop(session_id, None)     # ← Varsa sil, yoksa hata verme
+```
+
+**Neden `pop(key, None)` ve `del` değil?** `del _stores[key]` key yoksa `KeyError` fırlatır.
+`pop(key, None)` key yoksa sessizce `None` döner. `release_store` birden fazla kez
+çağrılabilir (reset_session sırasında) — hata vermemeli.
 
 ---
 
 ## Bölüm 6: Araçlar (Tools)
 
-Ajan dünyayla araçları aracılığıyla etkileşiyor. 5 araç var, hepsi **factory pattern**
-ile oluşturuluyor.
+5 araç var. Hepsi **factory pattern** kullanıyor. Neden?
 
-> 🔑 **Factory Pattern neden?** Her araç bir `backend` referansına ve `session_id`'ye
-> ihtiyaç duyuyor. Factory fonksiyon bu değerleri closure'da yakalıyor. Böylece
-> LangChain aracı çağırdığında sadece `execute(command="...")` diyor — backend
-> referansı otomatik olarak orada.
+### 6.0 Factory Pattern — Neden?
 
-### 6.1 `parse_file` — Dosya Şeması Çıkarma
+```python
+# Alternatif 1: Global değişken (KÖTÜ)
+_backend = None
+
+@tool
+def execute(command: str) -> str:
+    return _backend.execute(command)      # ← Global'e bağımlı — test edilemez
+
+# Alternatif 2: Parametre (KÖTÜ)
+@tool
+def execute(command: str, backend: OpenSandboxBackend) -> str:
+    return backend.execute(command)       # ← LangChain backend'i nereden bilecek?
+```
+
+LangChain `@tool` fonksiyonlarını çağırırken sadece tool_call'daki parametreleri
+geçiriyor. `backend` veya `session_id` gibi altyapı parametrelerini geçiremez.
+
+```python
+# Alternatif 3: Factory + Closure (DOĞRU)
+def make_execute_tool(backend, session_id):
+    @tool
+    def execute(command: str) -> str:
+        return backend.execute(command)   # ← backend closure'da yakalanmış
+    return execute
+```
+
+Factory fonksiyon `backend`'i closure'da yakalıyor. Döndürdüğü `execute` fonksiyonu
+LangChain'in beklediği imzaya sahip (`command: str`) ama içeride `backend`'e erişebiliyor.
+
+> 💡 **Closure nedir?** İç fonksiyon, dış fonksiyonun değişkenlerine erişebilir — dış
+> fonksiyon bitse bile. `make_execute_tool` return ettikten sonra `backend` değişkeni
+> hâlâ `execute` fonksiyonunun "hafızasında" yaşıyor. Python'da fonksiyonlar
+> `__closure__` attribute'unda bu referansları tutuyor.
+
+### 6.1 `parse_file` — Yerel Dosya Şeması Çıkarma
 
 🔗 [**src/tools/file_parser.py** — Tam dosya (327 satır)](https://github.com/CYBki/code-execution-agent/blob/main/src/tools/file_parser.py)
 
-Bu araç **sandbox'a gitmiyor**. Dosyayı doğrudan Python'da (sunucu tarafında)
-ayrıştırıyor. Neden? Hız. Sandbox round-trip ~2 saniye, lokal ayrıştırma ~0.1 saniye.
+**Neden bu araç sandbox'a GİTMİYOR?**
 
-**Factory fonksiyon:**
+Sandbox'ta `pd.read_excel()` çalıştırmak:
+1. Python kodunu base64'e çevir
+2. Sandbox'a gönder
+3. Container'da dosyayı oku
+4. Sonucu geri gönder
+→ ~2-3 saniye
+
+Lokal'de aynı dosya zaten bellekte (Streamlit upload):
+1. `pd.read_excel(io.BytesIO(file_bytes))`
+→ ~0.1 saniye
+
+20x daha hızlı. Ve execute kotasını tüketmiyor.
+
+#### Factory fonksiyon — closure detayı
 
 🔗 [**src/tools/file_parser.py:237-327** — make_parse_file_tool](https://github.com/CYBki/code-execution-agent/blob/main/src/tools/file_parser.py#L237-L327)
 
 ```python
 def make_parse_file_tool(uploaded_files: list | None = None):
-    _files = uploaded_files  # Closure'da yakala
+    _files = uploaded_files if uploaded_files is not None else st.session_state.get("uploaded_files", [])
+```
 
+**Neden `uploaded_files` parametresi var?** Ajan araçları thread pool'da çalışıyor.
+`st.session_state` ana thread'e ait — ajan thread'inden erişmek tehlikeli.
+Bu yüzden factory çağrılırken dosya listesini closure'a yakalıyoruz.
+
+**`if uploaded_files is not None` — neden `is not None` ve `if uploaded_files` değil?**
+Boş liste `[]` falsy'dir. `if uploaded_files:` boş listeyi `None` gibi değerlendirir.
+Ama boş liste geçerli bir değer — "dosya yok" demek. `None` ise "parametreyi vermedim,
+fallback kullan" demek. İkisini ayırt etmek lazım.
+
+```python
     @tool
     def parse_file(filename: str) -> str:
-        uploaded_files = _files  # Thread-safe: st.session_state'e dokunma
-        # ... dosyayı bul, parse et, sonuç döndür
-    return parse_file
+        uploaded_files = _files    # ← Closure'dan al, st.session_state'e DOKUNMA
+
+        target = None
+        for f in uploaded_files:
+            if f.name == filename:
+                target = f
+                break
 ```
 
-**Dosya türü algılama:**
-
-🔗 [**src/tools/file_parser.py:226-234** — PARSERS sözlüğü](https://github.com/CYBki/code-execution-agent/blob/main/src/tools/file_parser.py#L226-L234)
+**Neden lineer arama?** Dosya sayısı genellikle 1-5. `dict` veya `set` kullanmak
+gereksiz karmaşıklık. "Premature optimization is the root of all evil."
 
 ```python
-PARSERS = {
-    ".csv": _parse_csv,
-    ".tsv": _parse_tsv,
-    ".xlsx": _parse_excel,
-    ".xls": _parse_excel,
-    ".xlsm": _parse_excel,
-    ".json": _parse_json,
-    ".pdf": _parse_pdf,
-}
+        if target is None:
+            available = [f.name for f in uploaded_files] if uploaded_files else []
+            return f"File '{filename}' not found. Available files: {available}"
 ```
 
-Her parser kendi dosya türüne özel bilgi döndürüyor:
-- **Excel:** Sheet listesi, her sheet'in kolonları, veri tipleri, tarih formatları
-- **CSV:** Kolon tipleri, satır sayısı, önizleme
-- **PDF:** Sayfa sayısı, tablo sayısı, metin önizlemesi
+**Neden mevcut dosyaları gösteriyoruz?** Ajan bazen dosya adını yanlış hatırlıyor.
+"sales.xlsx" yerine "Sales.xlsx" veya "data.xlsx" diyebiliyor. Mevcut dosya listesini
+göstererek kendini düzeltmesini sağlıyoruz.
 
-**Excel tarih formatı tespiti — akıllı dokunuş:**
+#### Excel tarih formatı tespiti — neden bu kadar detaylı?
 
-🔗 [**src/tools/file_parser.py:38-72** — _excel_numfmt_to_strftime](https://github.com/CYBki/code-execution-agent/blob/main/src/tools/file_parser.py#L38-L72)
-
-Excel'de tarihler sayı olarak saklanır ama "görüntüleme formatı" farklı olabilir
-(MM/DD/YYYY vs DD.MM.YYYY). Biz openpyxl ile hücrenin `number_format`'ını okuyoruz
-ve Python'un `strftime` formatına çeviriyoruz. Ajan bu bilgiyle tarihleri doğru
-formatta gösteriyor.
-
-**Büyük dosya uyarısı:**
-
-🔗 [**src/tools/file_parser.py:314-322** — DuckDB uyarısı](https://github.com/CYBki/code-execution-agent/blob/main/src/tools/file_parser.py#L314-L322)
+🔗 [**src/tools/file_parser.py:38-172** — Excel parsing ve tarih tespiti](https://github.com/CYBki/code-execution-agent/blob/main/src/tools/file_parser.py#L38-L172)
 
 ```python
-if size_mb >= 40:
-    output += "⚠️ BÜYÜK DOSYA — DUCKDB STRATEJİSİ ZORUNLU..."
+def _excel_numfmt_to_strftime(number_format: str) -> str:
+    if not number_format or number_format == 'General':
+        return '%Y-%m-%d'
+
+    nf = number_format.lower().strip()
+    nf = nf.split(' hh')[0].split(' h:')[0].strip()   # ← Saat kısmını kes
 ```
 
-40MB üstü dosyalar için pandas yerine DuckDB kullanılması gerektiğini ajana bildiriyor.
+**Neden saat kısmını kesiyoruz?** Excel'de `DD/MM/YYYY HH:MM:SS` formatı yaygın. Ama
+biz raporda sadece tarihi göstermek istiyoruz. Saat kısmını kaldırıp sadece tarih
+formatını çıkarıyoruz.
+
+```python
+    mappings = [
+        ('mm/dd/yyyy', '%m/%d/%Y'),      # ABD formatı
+        ('dd/mm/yyyy', '%d/%m/%Y'),      # Avrupa formatı
+        ('yyyy-mm-dd', '%Y-%m-%d'),      # ISO formatı
+        ('dd.mm.yyyy', '%d.%m.%Y'),      # Almanya/Türkiye formatı
+        ...
+    ]
+```
+
+**Neden bu kadar çok format?** Her ülke farklı tarih formatı kullanıyor. `01/02/2024`:
+- ABD'de: 2 Ocak 2024
+- Avrupa'da: 1 Şubat 2024
+
+Yanlış format = yanlış analiz. Ajan Excel'in kendi formatını bilirse doğru yorumlar.
+
+```python
+def _parse_excel(file_bytes, filename):
+    wb = load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
+```
+
+**Neden `read_only=True`?** Dosyayı değiştirmeyeceğiz, sadece format bilgisini okuyacağız.
+`read_only=True` bellek kullanımını %60-70 azaltır — büyük dosyalar için kritik.
+
+**Neden `data_only=True`?** Excel formülleri var: `=SUM(A1:A100)`. `data_only=True` ile
+formül yerine hesaplanmış değeri alıyoruz. Ajan formül stringi değil, gerçek sayıyı görmeli.
+
+```python
+    for col in df.columns:
+        dtype = str(df[col].dtype)
+        if dtype in ('datetime64[ns]', 'datetime64[us]'):
+            col_idx = list(df.columns).index(col)
+            ws = wb[sheet]
+            for row in ws.iter_rows(min_row=2, max_row=6, min_col=col_idx+1, max_col=col_idx+1):
+                for cell in row:
+                    if cell.number_format and cell.number_format != 'General':
+                        py_fmt = _excel_numfmt_to_strftime(cell.number_format)
+```
+
+**Neden 2-6. satırları kontrol ediyoruz?** 1. satır başlık. 2-6. satırlar veri satırları.
+İlk birkaç hücrenin formatı tüm kolonu temsil eder. Tüm satırları kontrol etmek gereksiz.
+
+#### Parse sonrası yönlendirme
+
+🔗 [**src/tools/file_parser.py:281-322** — Yönlendirme mesajları](https://github.com/CYBki/code-execution-agent/blob/main/src/tools/file_parser.py#L281-L322)
+
+```python
+    output += "✅ PARSE BAŞARILI. SONRAKI ADIM:\n\n"
+    output += "❌ YAPMA: ls, cat, os.listdir, parse_file tekrar çağırma\n"
+    output += "✅ YAP:\n"
+    output += f"1. DÜŞÜNCE yaz: 'Schema alındı. Dosya /home/sandbox/{filename}...'\n"
+    output += "2. execute() çağır:\n"
+    output += f"   df = pd.read_excel('/home/sandbox/{filename}')\n"
+```
+
+**Neden bu kadar açık yönlendirme?** Claude bazen `parse_file`'dan sonra `ls` veya tekrar
+`parse_file` çağırıyor. Çıktının sonuna "BUNU YAPMA, BUNU YAP" yazarak bu davranışı
+%90+ azaltıyoruz. LLM'ler son gördükleri metne göre hareket etmeye meyilli (recency bias)
+— çıktının sonuna koyduğumuz talimat en etkili yerde.
+
+```python
+    if size_mb >= 40:
+        output += "⚠️ BÜYÜK DOSYA — DUCKDB STRATEJİSİ ZORUNLU..."
+```
+
+**Neden 40MB eşiği?** Deneysel: 40MB altında pandas hızlı çalışıyor (~2-5 saniye).
+40MB üstünde pandas bellek tüketimi kritik seviyeye çıkıyor (dosya boyutunun ~3-5x'i
+RAM kullanır). DuckDB lazy evaluation ile sadece gerekli kısmı okur — 40MB dosyada bile
+100MB altında RAM kullanır.
 
 ### 6.2 `execute` — Kod Çalıştırma
 
 🔗 [**src/tools/execute.py** — Tam dosya (165 satır)](https://github.com/CYBki/code-execution-agent/blob/main/src/tools/execute.py)
 
-Bu araç ajanın "elleri" — analiz kodu çalıştırıyor, PDF üretiyor, dashboard
-oluşturuyor.
+#### Python kodu tespiti — iki katmanlı
 
-**Python kodu tespiti — iki yol:**
-
-🔗 [**src/tools/execute.py:35-51** — _extract_python_code](https://github.com/CYBki/code-execution-agent/blob/main/src/tools/execute.py#L35-L51)
+🔗 [**src/tools/execute.py:19-51** — Kod tespiti](https://github.com/CYBki/code-execution-agent/blob/main/src/tools/execute.py#L19-L51)
 
 ```python
-# Yol 1: python3 -c "..." kalıbı
-_PY_INLINE_RE = re.compile(r"""^python3?\s+-c\s+(['"])(.*)\1\s*$""", re.DOTALL)
-
-# Yol 2: Ham Python kodu (python3 -c prefix'i olmadan)
-_PY_STARTS = ("import ", "from ", "print(", "def ", "df ", "pd.", "np.", ...)
+_PY_INLINE_RE = re.compile(
+    r"""^python3?\s+-c\s+(['"])(.*)\1\s*$""",
+    re.DOTALL,
+)
 ```
 
-Ajan bazen `python3 -c "..."` yazıyor, bazen doğrudan Python kodu gönderiyor.
-İkisini de yakalıyoruz.
-
-**Base64 kodlama — neden?**
-
-🔗 [**src/tools/execute.py:92-97** — Base64 kodlama](https://github.com/CYBki/code-execution-agent/blob/main/src/tools/execute.py#L92-L97)
+**Regex açıklaması:**
+- `^python3?` → "python" veya "python3" ile başla
+- `\s+-c\s+` → `-c` flag'i (inline kod)
+- `(['"])` → Açılış tırnağını yakala (group 1)
+- `(.*)` → Kod içeriğini yakala (group 2)
+- `\1` → Aynı tırnakla kapat (backreference)
+- `re.DOTALL` → `.` karakteri `\n`'i de eşleştirsin (çok satırlı kod)
 
 ```python
-if py_code:
-    b64 = base64.b64encode(py_code.encode()).decode()
-    tmp_path = f"/tmp/_run_{uuid.uuid4().hex[:8]}.py"
-    shell_cmd = f"printf '%s' '{b64}' | base64 -d > {tmp_path} && python3 {tmp_path}"
+def _unescape_shell(code: str, quote_char: str) -> str:
+    if quote_char == '"':
+        code = code.replace('\\"', '"').replace('\\\\', '\\')
+    return code
 ```
 
-Python kodu tırnak, parantez, yeni satır gibi shell'i bozan karakterler içerebilir.
-Base64'e çevirip dosyaya yazıyoruz — shell escaping sorunları tamamen ortadan kalkıyor.
-
-**Retry mekanizması:**
-
-🔗 [**src/tools/execute.py:99-124** — Bağlantı retry](https://github.com/CYBki/code-execution-agent/blob/main/src/tools/execute.py#L99-L124)
-
-Container IP çözümleme bazen başarısız olabiliyor. 2 deneme hakkı var, araya 1 saniye
-bekleme koyuluyor.
-
-**`publish_html()` otomatik tespiti:**
-
-🔗 [**src/tools/execute.py:142-158** — Publish HTML algılama](https://github.com/CYBki/code-execution-agent/blob/main/src/tools/execute.py#L142-L158)
+**Neden unescape?** Shell'de çift tırnak içinde `\"` ve `\\` escape edilir.
+Python kodunda `print("hello")` yazılırsa shell'e `print(\"hello\")` olarak geçer.
+Biz geri çeviriyoruz. Tek tırnak içinde escape yok — olduğu gibi bırak.
 
 ```python
-if output and _HTML_MARKER in output:  # "__PUBLISH_HTML__"
-    html_result = backend.execute(f"cat {_HTML_PATH}")
-    get_store(session_id).add_html(inject_height_script(html_content))
-    backend.execute(f"rm -f {_HTML_PATH}")
+def _extract_python_code(command: str) -> str | None:
+    m = _PY_INLINE_RE.match(command.strip())
+    if m:
+        return _unescape_shell(m.group(2), m.group(1))
+
+    # Fallback: python3 -c prefix'i var ama regex eşleşmedi
+    for prefix in ("python3 -c ", "python -c "):
+        if command.strip().startswith(prefix):
+            code = command.strip()[len(prefix):]
+            ...
+            return code if len(code) > 10 else None
+    return None
 ```
 
-Ajan kodu içinde `publish_html(html)` çağırdığında:
-1. HTML dosyaya yazılır (`/home/sandbox/__dashboard__.html`)
-2. `__PUBLISH_HTML__` marker'ı stdout'a basılır
-3. `execute.py` bu marker'ı yakalar
-4. HTML'i dosyadan okur, height script enjekte eder, artifact store'a koyar
-5. Geçici dosyayı siler
+**Neden fallback?** Regex bazen eşleşmiyor — tırnak dengesizliği, escape sorunları.
+Fallback basit string kesme ile kodu çıkarıyor. `len(code) > 10` kontrolü yanlış
+pozitifları önlüyor — 10 karakterden kısa "kod" muhtemelen kod değil.
 
-### 6.3 `generate_html` — HTML Dashboard Render
+#### İkinci katman — ham Python kodu tespiti
+
+🔗 [**src/tools/execute.py:80-90** — Raw Python detection](https://github.com/CYBki/code-execution-agent/blob/main/src/tools/execute.py#L80-L90)
+
+```python
+            if not py_code:
+                stripped = command.strip()
+                _PY_STARTS = ("import ", "from ", "print(", "def ", "class ",
+                              "# ", "try:", "with ", "for ", "if ", "df ", "df=",
+                              "pdf ", "pdf=", "result ", "result=",
+                              "pd.", "np.", "plt.", "total_", "assert ", ...)
+                if any(stripped.startswith(p) for p in _PY_STARTS):
+                    py_code = stripped
+```
+
+**Neden bu?** Ajan bazen `python3 -c` prefix'i olmadan doğrudan Python kodu gönderiyor:
+```python
+df = pd.read_excel('/home/sandbox/data.xlsx')
+print(df.shape)
+```
+
+Bu shell komutu olarak çalıştırılırsa `df: command not found` hatası alırsın.
+`_PY_STARTS` listesi ile "bu Python kodu" diyip yönlendiriyoruz.
+
+**Neden `"df "` ve `"df="` ayrı?** `df = pd.read_excel(...)` (boşluklu) ve
+`df=pd.read_excel(...)` (boşluksuz) ikisi de geçerli Python. İkisini de yakalıyoruz.
+
+#### Base64 kodlama — kritik mekanizma
+
+🔗 [**src/tools/execute.py:92-97** — Base64 encoding](https://github.com/CYBki/code-execution-agent/blob/main/src/tools/execute.py#L92-L97)
+
+```python
+            if py_code:
+                b64 = base64.b64encode(py_code.encode()).decode()
+                tmp_path = f"/tmp/_run_{uuid.uuid4().hex[:8]}.py"
+                shell_cmd = f"printf '%s' '{b64}' | base64 -d > {tmp_path} && python3 {tmp_path} && rm -f {tmp_path}"
+```
+
+**Neden base64?** Python kodu şunları içerebilir:
+- Tek tırnak: `print('hello')`
+- Çift tırnak: `df["column"]`
+- Dolar işareti: `f"${total}"`
+- Yeni satır: `\n`
+- Backslash: `\\n`
+
+Bunların hepsi shell'i bozar. Base64'e çevirince sadece `A-Z`, `a-z`, `0-9`, `+`, `/`, `=`
+kalır — shell-safe.
+
+**Neden `uuid.uuid4().hex[:8]`?** Benzersiz dosya adı. Eşzamanlı çalıştırmalarda
+çakışma olmasın. 8 hex karakter = 4.3 milyar kombinasyon — yeterli.
+
+**Neden `&& rm -f {tmp_path}`?** Geçici dosyayı temizle. Birikmesini önle.
+`-f` flag'i: dosya yoksa hata verme.
+
+#### publish_html() otomatik tespiti
+
+🔗 [**src/tools/execute.py:142-158** — HTML marker tespiti](https://github.com/CYBki/code-execution-agent/blob/main/src/tools/execute.py#L142-L158)
+
+```python
+_HTML_MARKER = "__PUBLISH_HTML__"
+_HTML_PATH = "/home/sandbox/__dashboard__.html"
+
+# ... execute sonrası:
+            if output and _HTML_MARKER in output:
+                try:
+                    html_result = backend.execute(f"cat {_HTML_PATH}")
+                    html_content = getattr(html_result, "output", "")
+                    if html_content and html_content.strip():
+                        from src.tools.generate_html import inject_height_script
+                        from src.tools.artifact_store import get_store
+                        get_store(session_id).add_html(inject_height_script(html_content))
+                        backend.execute(f"rm -f {_HTML_PATH}")
+```
+
+**Tam akış:**
+1. Kernel'da `publish_html(html)` çağrılır → dosyaya yazar + marker basar
+2. `execute.py` çıktıda `__PUBLISH_HTML__` görür
+3. `cat` ile dosyayı okur
+4. Height script enjekte eder (iframe yüksekliği için)
+5. Artifact store'a ekler
+6. Geçici dosyayı siler
+7. Marker'ı çıktıdan temizler
+8. "✅ HTML dashboard rendered successfully." ekler
+
+**Neden marker-based ve doğrudan değil?** Kernel'ın stdout'u string. İçinde hem
+normal print çıktıları hem de HTML olabilir. Marker ile "bu satırdan sonra HTML var"
+demek yerine "HTML'i dosyaya yazdım, bak" diyoruz. Dosya-tabanlı yaklaşım HTML'i
+stdout'tan ayırıyor.
+
+### 6.3 `generate_html` — HTML İframe Render
 
 🔗 [**src/tools/generate_html.py** — Tam dosya (57 satır)](https://github.com/CYBki/code-execution-agent/blob/main/src/tools/generate_html.py)
-
-Bu araç doğrudan HTML alıp artifact store'a koyuyor.
-
-**Height script enjeksiyonu:**
-
-🔗 [**src/tools/generate_html.py:9-31** — HEIGHT_SCRIPT ve inject](https://github.com/CYBki/code-execution-agent/blob/main/src/tools/generate_html.py#L9-L31)
 
 ```python
 HEIGHT_SCRIPT = """
@@ -641,206 +1227,218 @@ HEIGHT_SCRIPT = """
     const h = document.body.scrollHeight;
     window.parent.postMessage({type: 'streamlit:setFrameHeight', height: h}, '*');
   }
-  ...
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', _reportHeight);
+  } else {
+    _reportHeight();
+  }
 </script>
 """
 ```
 
-Streamlit'in `components.html()` iframe kullanıyor. İçerik yüklendikten sonra
-iframe'in yüksekliğini otomatik ayarlamak gerekiyor — bu script tam bunu yapıyor.
-`postMessage` ile Streamlit'e "benim yüksekliğim X piksel" diyor.
+**Neden bu script?** Streamlit'in `components.html()` iframe kullanıyor. İframe
+sabit yükseklikte — içerik uzunsa kesilir, kısaysa boşluk kalır. Bu script
+`postMessage` ile Streamlit'e "benim gerçek yüksekliğim X piksel" diyor.
+Streamlit iframe'i otomatik ayarlıyor.
 
-**Factory fonksiyon:**
-
-🔗 [**src/tools/generate_html.py:34-57** — make_generate_html_tool](https://github.com/CYBki/code-execution-agent/blob/main/src/tools/generate_html.py#L34-L57)
-
-```python
-def make_generate_html_tool(session_id: str = ""):
-    @tool
-    def generate_html(html_code: str) -> str:
-        injected = inject_height_script(html_code)
-        get_store(session_id).add_html(injected)
-        return "HTML rendered successfully in browser iframe."
-    return generate_html
-```
+**Neden `readyState` kontrolü?** Script DOM yüklenmeden önce çalışırsa `body.scrollHeight`
+yanlış değer verir (0 veya kısmi). `DOMContentLoaded` event'ini bekleyerek doğru
+yüksekliği garantiliyoruz. Script geç enjekte edildiyse DOM zaten hazır — hemen çalış.
 
 ### 6.4 `download_file` — Dosya İndirme
 
 🔗 [**src/tools/download_file.py** — Tam dosya (110 satır)](https://github.com/CYBki/code-execution-agent/blob/main/src/tools/download_file.py)
 
-**Güvenlik kontrolü:**
-
-🔗 [**src/tools/download_file.py:78-80** — Path güvenliği](https://github.com/CYBki/code-execution-agent/blob/main/src/tools/download_file.py#L78-L80)
-
 ```python
-ALLOWED_PREFIX = SANDBOX_HOME + "/"
-if not file_path.startswith(ALLOWED_PREFIX):
-    return f"❌ Only files under {ALLOWED_PREFIX} can be downloaded."
+    ALLOWED_PREFIX = SANDBOX_HOME + "/"
+    if not file_path.startswith(ALLOWED_PREFIX):
+        return f"❌ Only files under {ALLOWED_PREFIX} can be downloaded."
 ```
 
-Sadece `/home/sandbox/` altındaki dosyalar indirilebilir. Ajan `/etc/passwd` gibi
-sistem dosyalarına erişemez.
+**Güvenlik kontrolü — neden?** Ajan hallüsinasyon yapıp `/etc/passwd` veya
+`/root/.ssh/id_rsa` indirmeye çalışabilir. Path prefix kontrolü bunu önlüyor.
+Sadece `/home/sandbox/` altı indirilebilir.
 
-**Excel tarih temizleme — kullanıcı dostu dokunuş:**
+#### Excel tarih temizleme — detaylı açıklama
 
 🔗 [**src/tools/download_file.py:17-62** — _clean_excel_dates](https://github.com/CYBki/code-execution-agent/blob/main/src/tools/download_file.py#L17-L62)
 
 ```python
 def _clean_excel_dates(content: bytes) -> bytes:
-    # Tüm değerler gece yarısı (00:00:00) ise → sadece tarih göster
-    if all_midnight:
-        for c in cells_with_dates:
-            c.value = c.value.date()        # datetime → date
-            c.number_format = 'YYYY-MM-DD'
+    wb = load_workbook(io.BytesIO(content))
+    for ws in wb.worksheets:
+        for col in ws.iter_cols(min_row=2, max_row=ws.max_row):
+            cells_with_dates = [c for c in col if isinstance(c.value, datetime)]
+            if not cells_with_dates:
+                continue
+
+            all_midnight = all(
+                c.value.hour == 0 and c.value.minute == 0 and c.value.second == 0
+                for c in cells_with_dates
+            )
+            if all_midnight:
+                for c in cells_with_dates:
+                    c.value = c.value.date()         # datetime → date
+                    c.number_format = 'YYYY-MM-DD'
 ```
 
-pandas DateTime'ları Excel'e yazarken otomatik olarak `2024-01-15 00:00:00` şeklinde
-yazıyor. Ama kullanıcı sadece `2024-01-15` görmek istiyor. Bu fonksiyon indirme
-sırasında otomatik temizlik yapıyor.
+**Sorun ne?** pandas `datetime64` tipini Excel'e yazarken `2024-01-15 00:00:00` olarak
+yazar. Kullanıcı Excel'de "00:00:00" görünce "bu ne?" diye soruyor.
+
+**Çözüm mantığı:** TÜM değerler gece yarısıysa (saat/dakika/saniye = 0), bu kolon
+aslında sadece tarih — saat kısmı anlamsız. `datetime → date` çevrimi yapıp format'ı
+`YYYY-MM-DD` olarak ayarlıyoruz.
+
+**Neden tüm değerler kontrol?** Eğer bazı hücreler `14:30:00` gibiyse, bu kolon
+gerçekten datetime — saat bilgisi önemli. O zaman dokunmuyoruz.
 
 ### 6.5 `create_visualization` — Statik Grafikler
 
 🔗 [**src/tools/visualization.py** — Tam dosya (60 satır)](https://github.com/CYBki/code-execution-agent/blob/main/src/tools/visualization.py)
 
 ```python
-def make_visualization_tool(backend, session_id):
-    @tool
-    def create_visualization(code: str) -> str:
-        wrapped_code = code + "\nimport matplotlib; matplotlib.pyplot.close('all')"
-        exec_result = backend.execute(wrapped_code)
-        responses = backend.download_files([f"{SANDBOX_HOME}/chart.png"])
+    wrapped_code = code + "\nimport matplotlib; matplotlib.pyplot.close('all')"
+```
+
+**Neden `plt.close('all')` ekliyoruz?** matplotlib figürleri bellekte kalır. 10 grafik
+oluşturursan 10 figür birikir. Sandbox'ın sınırlı belleğinde bu sorun yaratır.
+Her grafik sonrası temizlik.
+
+```python
+    responses = backend.download_files([f"{SANDBOX_HOME}/chart.png"])
+    resp = responses[0] if responses else None
+    if resp and resp.content and not resp.error:
         get_store(session_id).add_chart(resp.content, code)
 ```
 
-Matplotlib kodu sandbox'ta çalıştırılıyor → `chart.png` üretiliyor → indirilip
-artifact store'a konuluyor → UI'da gösteriliyor.
-
-`plt.close('all')` her zaman ekleniyor — bellek sızıntısını önlemek için.
-
-> 💡 **`generate_html` vs `create_visualization`:** İnteraktif dashboard istiyorsan
-> (Chart.js, Plotly.js) → `generate_html`. Statik PNG grafik istiyorsan (matplotlib,
-> seaborn) → `create_visualization`. İkisi farklı kullanım senaryoları için var.
+**Neden `code`'u da saklıyoruz?** UI'da "Show code" butonu var — kullanıcı grafiğin
+altında nasıl üretildiğini görebilir. Eğitim amaçlı.
 
 ---
 
 ## Bölüm 7: Skill Sistemi
 
-Şimdi ilginç bir sorun var: Her dosya türü için farklı kurallar lazım. Excel
-dosyasıyla PDF dosyası aynı şekilde analiz edilmez. Ama tüm kuralları her zaman
-sistem prompt'una eklemek prompt'u gereksiz şişirir.
+### 7.1 Problem: One-Size-Fits-All Prompt
 
-Çözüm: **Progressive Disclosure** — ihtiyaç duyulduğunda yükle.
+Tüm kuralları her zaman sisteme prompt'una koysak:
+- Excel kuralları (~500 satır)
+- CSV kuralları (~200 satır)
+- PDF kuralları (~150 satır)
+- DuckDB kuralları (~300 satır)
+- Çoklu dosya JOIN kuralları (~200 satır)
+- Görselleştirme kuralları (~150 satır)
 
-### 7.1 Skill Kayıt Defteri (Registry)
+= ~1,500 satır ekstra prompt. Claude'un context window'u sınırlı. Bu kadar kural:
+1. Token maliyetini artırır
+2. Ajanın odağını dağıtır — Excel analizi yaparken PDF kurallarını okuması gereksiz
+3. Çelişkili kurallar kafa karıştırır
+
+### 7.2 Çözüm: Progressive Disclosure
 
 🔗 [**src/skills/registry.py** — Tam dosya (117 satır)](https://github.com/CYBki/code-execution-agent/blob/main/src/skills/registry.py)
 
-**Tetikleme kuralları:**
-
-🔗 [**src/skills/registry.py:6-51** — SKILL_TRIGGERS](https://github.com/CYBki/code-execution-agent/blob/main/src/skills/registry.py#L6-L51)
-
 ```python
-SKILL_TRIGGERS = {
+SKILL_TRIGGERS: dict[str, dict] = {
     "xlsx": {
-        "extensions": [".xlsx", ".xls", ".xlsm"],
-        "keywords": ["excel", "spreadsheet", "workbook"],
+        "extensions": [".xlsx", ".xls", ".xlsm"],    # ← Dosya uzantısı tetikleme
+        "keywords": ["excel", "spreadsheet"],         # ← Anahtar kelime tetikleme
         "skill_path": "skills/xlsx/SKILL.md",
         "references": {
             "large_files": {
                 "path": "skills/xlsx/references/large_files.md",
                 "triggers": {
-                    "file_size_mb": 40,          # 40MB üstü → DuckDB kuralları
-                    "keywords": ["duckdb", "million rows", ...],
+                    "file_size_mb": 40,               # ← Boyut tetikleme
+                    "keywords": ["duckdb", "million rows", "out of memory"],
                 },
             },
             "multi_file_joins": {
                 "path": "skills/xlsx/references/multi_file_joins.md",
                 "triggers": {
-                    "min_files": 2,              # 2+ dosya → JOIN kuralları
-                    "keywords": ["join", "merge", ...],
+                    "min_files": 2,                   # ← Dosya sayısı tetikleme
+                    "keywords": ["join", "merge"],
                 },
             },
         },
     },
-    "csv": { ... },
-    "pdf": { ... },
-    "visualization": {
-        "extensions": [],                        # Uzantı yok — sadece keyword
-        "keywords": ["chart", "dashboard", ...],
-    },
-}
 ```
 
-**Algılama fonksiyonları:**
-
-🔗 [**src/skills/registry.py:54-74** — detect_required_skills](https://github.com/CYBki/code-execution-agent/blob/main/src/skills/registry.py#L54-L74)
+**4 tetikleme mekanizması:**
+1. **Dosya uzantısı:** `.xlsx` → xlsx skill
+2. **Anahtar kelime:** "dashboard" → visualization skill
+3. **Dosya boyutu:** ≥40MB → large_files referansı
+4. **Dosya sayısı:** 2+ Excel → multi_file_joins referansı
 
 ```python
 def detect_required_skills(uploaded_files, user_query=""):
-    # 1. Dosya uzantılarını kontrol et
+    required_skills: set[str] = set()        # ← set: duplicate önle
+
     for file in uploaded_files:
         ext = "." + file.name.rsplit(".", 1)[-1].lower()
         for skill_name, config in SKILL_TRIGGERS.items():
             if ext in config["extensions"]:
                 required_skills.add(skill_name)
-    # 2. Kullanıcı sorgusundaki anahtar kelimeleri kontrol et
-    if user_query:
-        for skill_name, config in SKILL_TRIGGERS.items():
-            if any(kw in query_lower for kw in config["keywords"]):
-                required_skills.add(skill_name)
 ```
 
-🔗 [**src/skills/registry.py:77-117** — detect_reference_files](https://github.com/CYBki/code-execution-agent/blob/main/src/skills/registry.py#L77-L117)
+**Neden `rsplit(".", 1)`?** `file.name = "data.v2.xlsx"`. `split(".")` → `["data", "v2", "xlsx"]`.
+`rsplit(".", 1)` → `["data.v2", "xlsx"]`. Sağdan bölerek son uzantıyı doğru alıyoruz.
 
-Bu fonksiyon referans dosyalarını kontrol ediyor:
-- Dosya boyutu ≥ 40MB → `large_files.md` yükle
-- 2+ Excel dosyası → `multi_file_joins.md` yükle
-- Sorguda "duckdb" geçiyor → `large_files.md` yükle
+```python
+    if user_query:
+        query_lower = user_query.lower()
+        for skill_name, config in SKILL_TRIGGERS.items():
+            if skill_name not in required_skills:      # ← Zaten varsa ekleme
+                if any(kw in query_lower for kw in config["keywords"]):
+                    required_skills.add(skill_name)
+```
 
-### 7.2 Skill Yükleyici (Loader)
+**Neden `skill_name not in required_skills` kontrolü?** Dosya uzantısı zaten xlsx skill'i
+tetiklediyse, sorguda "excel" kelimesi geçse bile tekrar eklemeye çalışmaya gerek yok.
+
+### 7.3 Loader — Prompt Derleme
 
 🔗 [**src/skills/loader.py** — Tam dosya (86 satır)](https://github.com/CYBki/code-execution-agent/blob/main/src/skills/loader.py)
 
-**SKILL.md dosyalarını yükleme:**
-
-🔗 [**src/skills/loader.py:14-37** — load_skill](https://github.com/CYBki/code-execution-agent/blob/main/src/skills/loader.py#L14-L37)
-
 ```python
-@lru_cache(maxsize=32)  # Aynı skill'i tekrar tekrar okumamak için cache
+@lru_cache(maxsize=32)
 def load_skill(skill_name: str) -> dict | None:
     skill_path = Path(f"skills/{skill_name}/SKILL.md")
-    content = skill_path.read_text(encoding="utf-8")
-    # YAML frontmatter varsa ayrıştır
-    if content.startswith("---\n"):
-        frontmatter = yaml.safe_load(...)
-        instructions = content[end + 5:]
 ```
 
-SKILL.md dosyaları YAML başlık + Markdown içerik formatında:
+**Neden `lru_cache`?** Aynı skill dosyası her sorguda yeniden okunmasın. Dosya disk'ten
+okunuyor — cache'le ~0.001ms, cache'siz ~5ms. 32 farklı skill cache'leniyor (şu an 4
+var, gelecekte artabilir).
+
+```python
+    content = skill_path.read_text(encoding="utf-8")
+    if content.startswith("---\n"):
+        end = content.find("\n---\n", 4)
+        if end != -1:
+            frontmatter = yaml.safe_load(content[4:end])    # ← YAML metadata
+            instructions = content[end + 5:]                 # ← Markdown kurallar
+```
+
+**YAML frontmatter nedir?** Jekyll/Hugo gibi statik site oluşturuculardan ödünç alınmış
+bir kalıp. Dosyanın başında `---` ile çevrili YAML metadata, sonra Markdown içerik:
 
 ```yaml
 ---
 name: Excel Analysis
-description: Rules for Excel file analysis
+description: Rules for analyzing Excel files
 ---
 # Excel Analiz Kuralları
-1. Önce parse_file ile şemayı al
-2. Tarih kolonlarını tespit et
+1. Önce parse_file çağır
 ...
 ```
-
-**Prompt derleme:**
-
-🔗 [**src/skills/loader.py:49-86** — compose_system_prompt](https://github.com/CYBki/code-execution-agent/blob/main/src/skills/loader.py#L49-L86)
 
 ```python
 def compose_system_prompt(base_prompt, active_skills, uploaded_files=None, user_query=""):
     prompt_parts = [base_prompt]
+
     for skill_name in active_skills:
         skill = load_skill(skill_name)
         prompt_parts.append(f"# {skill['name']} Expertise\n\n{skill['instructions']}")
 
-        # Progressive disclosure: referans dosyalarını tetiklenenleri yükle
+        # Progressive disclosure: sadece tetiklenen referansları yükle
         ref_paths = detect_reference_files(skill_name, uploaded_files, user_query)
         for ref_path in ref_paths:
             ref_content = load_reference(ref_path)
@@ -849,696 +1447,685 @@ def compose_system_prompt(base_prompt, active_skills, uploaded_files=None, user_
     return "\n\n".join(prompt_parts)
 ```
 
-**Sonuç: Dinamik prompt boyutu**
+**Sonuç:** Prompt boyutu duruma göre değişiyor:
 
 | Senaryo | Prompt boyutu |
 |---------|--------------|
-| Küçük Excel dosyası | ~500 satır (base + xlsx skill) |
-| 50MB Excel dosyası | ~800 satır (+ large_files referansı) |
-| 2 Excel + "merge" sorgusu | ~900 satır (+ multi_file_joins referansı) |
-| Sadece "dashboard" sorgusu | ~400 satır (base + visualization skill) |
-
-> 💡 **Neden progressive disclosure?** Claude'un context window'u sınırlı.
-> Her zaman tüm kuralları yüklemek yerine, sadece gerekli olanları yüklemek
-> daha az token tüketir ve ajanın odaklanmasını sağlar.
+| Küçük Excel | ~base + 500 satır |
+| 50MB Excel | ~base + 800 satır (+DuckDB) |
+| 2 Excel + "merge" | ~base + 900 satır (+JOIN) |
+| Sadece "dashboard" | ~base + 150 satır |
 
 ---
 
 ## Bölüm 8: Sistem Prompt'u
 
-696 satırlık devasa bir prompt. Ajanın tüm davranışlarını bu belirliyor.
+🔗 [**src/agent/prompts.py** — Tam dosya (696 satır)](https://github.com/CYBki/code-execution-agent/blob/main/src/agent/prompts.py)
 
-### 8.1 Temel Kurallar
+696 satır. Neden bu kadar uzun? Çünkü LLM'ler kuralları "unutuyor" — aynı kuralı farklı
+açılardan, farklı örneklerle tekrar etmek uyumluluğu artırıyor.
 
-🔗 [**src/agent/prompts.py:1-50** — Giriş ve çıktı formatı kuralları](https://github.com/CYBki/code-execution-agent/blob/main/src/agent/prompts.py#L1-L50)
+### 8.1 Sayı Yasağı — Neden?
 
-```python
-BASE_SYSTEM_PROMPT = """You are a senior data analysis agent.
-Always respond to the user in Turkish.
+🔗 [**src/agent/prompts.py:34-42** — Chat message rules](https://github.com/CYBki/code-execution-agent/blob/main/src/agent/prompts.py#L34-L42)
 
-⚠️ OUTPUT FORMAT RULE (CRITICAL):
-- "Give Excel output" → ONLY execute(save Excel) + download_file
-- "Give PDF report" → ONLY execute(HTML→PDF weasyprint) + download_file
-...
-
-⚠️ CHAT MESSAGE RULES:
+```
 - NEVER use numbers, ratios, percentages in text summaries
-- Numbers belong in output files — chat message BRIEF (1-2 sentences)
+- ✅ OK: "Analysis complete, Excel ready."
+- ❌ FORBIDDEN: "Suzanne Collins leads with 278,329 reviews..."
 ```
 
-İlk kural: **Türkçe yanıt zorunlu.** İkinci kural: **Sayıları sohbet mesajında
-kullanma** — sadece dosyalarda olsun. Neden? Ajan bazen hallüsinasyon yapıp yanlış
-sayılar yazabiliyor. Dosyada gerçek hesaplama sonuçları var, sohbette ise sadece
-"Analiz tamamlandı, rapor hazır" yeterli.
+**Neden sayı yasağı?** Claude bazen hallüsinasyon yapıyor — önceki çıktıdaki sayıları
+yanlış hatırlıyor veya uydurma sayılar yazıyor. Raporda (PDF/Excel) sayılar gerçek
+hesaplamadan geliyor. Ama sohbet mesajında ajan "hatırlayarak" yazıyor — ve bu
+güvenilmez.
 
-### 8.2 Veri Fabrikasyonu Yasağı
+Çözüm radikal: **Sohbette sayı yazma, noktası.** Sayılar sadece dosyalarda olsun.
 
-🔗 [**src/agent/prompts.py:44-50** — RULE 1: DATA FABRICATION](https://github.com/CYBki/code-execution-agent/blob/main/src/agent/prompts.py#L44-L50)
+### 8.2 Hardcoded Veri Yasağı — En Kritik Kural
+
+🔗 [**src/agent/prompts.py:198-269** — RULE 3.5](https://github.com/CYBki/code-execution-agent/blob/main/src/agent/prompts.py#L198-L269)
+
+Bu kural 70 satır. Neden bu kadar uzun? Çünkü bu en yaygın hata:
+
+1. Ajan Execute #3'te: `print(m)` → `{'total_customers': 5863, ...}`
+2. Ajan Execute #4'te: `m = {'total_customers': 5863}` ← **KOPYALADI!**
+
+Sorun: Ajan sayıyı çıktıdan kopyaladı. Eğer veri değişirse (yeni satır eklendi,
+filtre değişti), bu sayı yanlış olur ama ajan farketmez.
+
+Çözüm:
+1. **Prompt'ta yasak** (RULE 3.5): "ASLA literal sayı yazma"
+2. **Prompt'ta değer yazdırma yasağı** (RULE 3.6): `print(m)` YASAK, `print(list(m.keys()))` yaz
+3. **Interceptor'da tespit** (graph.py): Regex ile hardcoded sayıları yakala
+
+Üç katmanlı savunma — çünkü tek katman yetmiyor.
+
+### 8.3 Kernel Güveni — Neden Bu Kadar Vurgulanıyor?
+
+🔗 [**src/agent/prompts.py:245-269** — Kernel confidence](https://github.com/CYBki/code-execution-agent/blob/main/src/agent/prompts.py#L245-L269)
 
 ```
-## RULE 1: DATA FABRICATION
-- If data can't be loaded: STOP, report error
-- If column missing: STOP, show available columns
-- NEVER put a number in report that can't be calculated
+✅ TRUST — These variables persist forever within the session:
+- DataFrame df from Execute #1 → available in Execute #5, #6, #7, even #10
+- Dict m from Execute #3 → available in Execute #7 (dashboard step)
 ```
 
-### 8.3 ReAct Döngüsü
-
-🔗 [**src/agent/prompts.py:61-113** — RULE 2: ReAct Loop](https://github.com/CYBki/code-execution-agent/blob/main/src/agent/prompts.py#L61-L113)
-
-```
-THOUGHT: [Ne gözlemledim] → [Ne yapacağım] → [Neden]
-  SCOPE CHECK: Kodumda kullanıcının istemediği filtre var mı?
-  execute(...)
-OBSERVATION: [Çıktıyı oku]
-DECISION: [Hedefe ulaştım mı? Hayır → ne düzeltmeliyim?]
-```
-
-Ajan her araç çağrısından önce DÜŞÜNCE yazmalı, sonra çıktıyı gözlemleyip karar
-vermeli. Bu yapı halüsinasyonları azaltıyor — ajan "düşünmeden" ardışık araç
-çağıramıyor.
-
-### 8.4 Kalıcı Kernel Güveni
-
-🔗 [**src/agent/prompts.py:117-269** — RULE 3: Persistent Kernel](https://github.com/CYBki/code-execution-agent/blob/main/src/agent/prompts.py#L117-L269)
-
-Bu prompt'un en uzun ve en kritik bölümü. Ajana tekrar tekrar anlatıyor:
-
-1. **Değişkenler yaşar** — `df` Execute #1'de oluşturuldu, Execute #5'te hâlâ orada
-2. **generate_html() ayrı process** — Python değişkenlerini göremez, HTML string geçir
-3. **ASLA hardcoded veri yazma** — `m = {'total': 5863}` YASAK, `m['total']` kullan
-4. **Değerleri yazdırma** — `print(m)` YASAK, `print(list(m.keys()))` kullan
-
-> 💡 **Neden bu kadar tekrar?** Claude bazen "öğrendiğini unutuyor" — uzun konuşmalarda
-> daha önceki kuralları es geçebiliyor. Aynı kuralı farklı açılardan, örneklerle,
-> DO/DON'T formatında tekrar etmek uyumluluğu artırıyor.
-
-### 8.5 PDF ve Dashboard Şablonları
-
-🔗 [**src/agent/prompts.py:441-696** — Teknik referans ve şablonlar](https://github.com/CYBki/code-execution-agent/blob/main/src/agent/prompts.py#L441-L696)
-
-Bu bölüm ajana PDF (WeasyPrint), PPTX (python-pptx + matplotlib) ve HTML dashboard
-(Chart.js) üretimi için şablonlar veriyor. Ajan bu şablonları kopyalayıp
-değiştiriyor — sıfırdan yazmak zorunda kalmıyor.
+Claude bazen "emin olamıyorum, tekrar hesaplayayım" diye veriyi tekrar okuyor.
+Bu execute kotasını boşa harcıyor. Prompt'ta "GÜVEN, değişkenler yaşıyor" diye
+tekrar tekrar söylüyoruz.
 
 ---
 
-## Bölüm 9: Ajan Beyni — `agent/graph.py`
+## Bölüm 9: Ajan Beyni
 
-629 satırlık bu dosya projenin en karmaşık parçası. Burada ajanı oluşturuyor,
-araçları bağlıyor ve **smart interceptor** ile her araç çağrısını denetliyoruz.
+🔗 [**src/agent/graph.py** — Tam dosya (629 satır)](https://github.com/CYBki/code-execution-agent/blob/main/src/agent/graph.py)
 
-### 9.1 Checkpointer — Konuşma Hafızası
-
-🔗 [**src/agent/graph.py:39-73** — _get_checkpointer](https://github.com/CYBki/code-execution-agent/blob/main/src/agent/graph.py#L39-L73)
-
-```python
-def _get_checkpointer():
-    database_url = os.environ.get("DATABASE_URL", "")
-    if database_url.startswith("postgresql"):
-        from langgraph.checkpoint.postgres import PostgresSaver
-        _checkpointer = PostgresSaver.from_conn_string(database_url)
-    else:
-        _checkpointer = SqliteSaver(sqlite3.connect(db_path, check_same_thread=False))
-```
-
-LangGraph her adımda (her araç çağrısı, her ajan yanıtı) durumu kaydediyor.
-Sayfa yenilendiğinde veya hata oluştuğunda son noktadan devam edebiliyor.
-
-### 9.2 Dinamik Execute Limiti
+### 9.1 Dinamik Execute Limiti
 
 🔗 [**src/agent/graph.py:75-92** — _compute_max_execute](https://github.com/CYBki/code-execution-agent/blob/main/src/agent/graph.py#L75-L92)
 
 ```python
-_COMPLEX_KEYWORDS = ("rfm", "cohort", "trend", "korelasyon", "forecast", ...)
+_COMPLEX_KEYWORDS = (
+    "rfm", "cohort", "trend", "korelasyon", "forecast", "predict",
+    "segment", "cluster", "cross-sell", "basket", ...
+)
 
 def _compute_max_execute(user_query, uploaded_files):
     is_complex = any(kw in query_lower for kw in _COMPLEX_KEYWORDS)
-    is_large = total_size > 10 * 1024 * 1024  # >10MB
+    is_large = total_size > 10 * 1024 * 1024
     return 10 if (is_complex or is_large) else 6
 ```
 
-Basit sorular için 6 execute hakkı, karmaşık analizler veya büyük dosyalar için 10.
-Bu maliyet kontrolü sağlıyor — sonsuz döngüye giren ajan API'yi tüketemiyor.
+**Neden dinamik?** Basit sorular ("bu dosyayı özetle") 3-4 execute'da biter. Karmaşık
+analizler ("RFM segmentasyonu yap, her segment için dashboard") 8-10 execute ister.
+Sabit limit 6 olsa karmaşık analizler yarım kalır. Sabit limit 10 olsa basit sorularda
+maliyet artar (ajan gereksiz execute yapar).
 
-### 9.3 `build_agent()` — Her Şeyi Birleştirme
+**Neden 10MB eşiği?** Büyük dosyalar daha çok adım gerektirir: CSV'ye çevirme, DuckDB
+sorguları, chunk processing. 10MB üstü dosyalarda ekstra execute hakkı veriyoruz.
 
-🔗 [**src/agent/graph.py:95-597** — build_agent fonksiyonu](https://github.com/CYBki/code-execution-agent/blob/main/src/agent/graph.py#L95-L597)
+### 9.2 Smart Interceptor — Detaylı
 
-Bu fonksiyon büyük ama mantığı adım adım:
+🔗 [**src/agent/graph.py:140-572** — Smart interceptor](https://github.com/CYBki/code-execution-agent/blob/main/src/agent/graph.py#L140-L572)
 
-**Adım 1: Backend al**
-
-```python
-backend = sandbox_manager.get_or_create_sandbox(thread_id)
-```
-
-**Adım 2: Sistem prompt'unu derle**
-
-🔗 [**src/agent/graph.py:108-129** — Prompt derleme](https://github.com/CYBki/code-execution-agent/blob/main/src/agent/graph.py#L108-L129)
+#### Closure değişkenleri — neden closure?
 
 ```python
-system_prompt = BASE_SYSTEM_PROMPT
-if uploaded_files:
-    # Dosya listesini prompt'a ekle
-    system_prompt += f"\n\n## Currently Uploaded Files\n{file_list}\n"
-    # Skill tespiti ve yükleme
-    required_skills = detect_required_skills(uploaded_files, user_query)
-    system_prompt = compose_system_prompt(system_prompt, required_skills, ...)
+    _seen_parse_files: set[str] = set()
+    _execute_count = 0
+    _max_execute = _compute_max_execute(user_query, uploaded_files)
+    _total_blocked = 0
+    _consecutive_blocks = 0
 ```
 
-**Adım 3: 5 aracı oluştur**
+**Neden instance variable değil?** Interceptor bir `@wrap_tool_call` dekoratörü ile
+sarmalanmış fonksiyon. LangChain middleware sistemi fonksiyon bekliyor, sınıf değil.
+Closure değişkenleri fonksiyonun "özel belleği" oluyor.
 
-🔗 [**src/agent/graph.py:131-138** — Araç oluşturma](https://github.com/CYBki/code-execution-agent/blob/main/src/agent/graph.py#L131-L138)
+#### `reset_interceptor_state()` — Neden kritik?
+
+🔗 [**src/agent/graph.py:152-166** — Reset](https://github.com/CYBki/code-execution-agent/blob/main/src/agent/graph.py#L152-L166)
 
 ```python
-tools = [
-    make_parse_file_tool(uploaded_files=uploaded_files),
-    make_execute_tool(backend, session_id=thread_id),
-    make_generate_html_tool(session_id=thread_id),
-    make_visualization_tool(backend, session_id=thread_id),
-    make_download_file_tool(backend, session_id=thread_id),
-]
+    def reset_interceptor_state():
+        nonlocal _execute_count, _total_blocked, _last_execute_failed, ...
+        _execute_count = 0
+        _total_blocked = 0
+        _consecutive_blocks = 0
+        _seen_parse_files.clear()
 ```
 
-**Adım 4: Smart interceptor oluştur** (aşağıda detaylı)
+**Senaryo:** Kullanıcı ilk mesajda 5 execute kullanıyor. İkinci mesaj gönderdiğinde
+`_execute_count` hâlâ 5. Limit 6 ise sadece 1 hakkı kalır — YANLIŞ!
 
-**Adım 5: Middleware zinciri ve ajan oluşturma**
+`reset_fn()` her yeni mesajdan önce çağrılarak sayaçlar sıfırlanıyor. Bu çağrı
+`chat.py`'de yapılıyor (satır 610).
 
-🔗 [**src/agent/graph.py:574-597** — Middleware ve ajan](https://github.com/CYBki/code-execution-agent/blob/main/src/agent/graph.py#L574-L597)
+**Neden `nonlocal`?** Python'da iç fonksiyon dış fonksiyonun değişkenlerini okuyabilir ama
+**yazamaz** (UnboundLocalError). `nonlocal` ile "bu değişken dış scope'ta, yazma izni ver"
+diyoruz.
+
+#### Kural 1: Circuit Breaker
+
+🔗 [**src/agent/graph.py:178-188** — Circuit breaker](https://github.com/CYBki/code-execution-agent/blob/main/src/agent/graph.py#L178-L188)
 
 ```python
-middleware = [
-    create_summarization_middleware(model, backend),   # Uzun konuşmaları özetle
-    AnthropicPromptCachingMiddleware(...),              # Prompt caching (maliyet ↓)
-    PatchToolCallsMiddleware(),                         # Araç çağrısı düzeltmeleri
-    smart_interceptor,                                  # Bizim güvenlik katmanımız
-]
-
-agent = create_agent(
-    model=model, tools=tools,
-    system_prompt=system_prompt,
-    middleware=middleware,
-    checkpointer=checkpointer,
-)
-agent = agent.with_config({"recursion_limit": REACT_MAX_ITERATIONS * 2 + 1})
+        if _consecutive_blocks >= _MAX_CONSECUTIVE_BLOCKS:  # 3
+            return ToolMessage(
+                content="🛑 CIRCUIT BREAKER: ... You are in an infinite loop. STOP NOW.",
+                tool_call_id=tool_call_id,
+            )
 ```
 
-### 9.4 Smart Interceptor — Güvenlik Kalkanı
+**Senaryo:** Ajan `ls` çağırıyor → engelleniyor → `os.listdir` çağırıyor → engelleniyor
+→ `glob.glob` çağırıyor → engelleniyor → sonsuz döngü!
 
-🔗 [**src/agent/graph.py:140-572** — Smart interceptor tamamı](https://github.com/CYBki/code-execution-agent/blob/main/src/agent/graph.py#L140-L572)
+3 ardışık engelleme sonrası "SONSUZ DÖNGÜDESÍN, DUR" mesajı. Ajan başka araç çağıramaz.
 
-Bu, projenin en kritik güvenlik mekanizması. Her araç çağrısı çalıştırılmadan önce
-interceptor'dan geçiyor.
+**Neden `_consecutive_blocks` ve `_total_blocked` ayrı?** `_consecutive_blocks` ardışık
+engellemeyi sayar — başarılı bir execute sıfırlar. `_total_blocked` toplam engellemeyi
+sayar — hiç sıfırlanmaz. İkisi farklı senaryolarda kullanılıyor.
 
-**Durum değişkenleri (closure'da yaşar):**
-
-🔗 [**src/agent/graph.py:141-150** — Durum değişkenleri](https://github.com/CYBki/code-execution-agent/blob/main/src/agent/graph.py#L141-L150)
-
-```python
-_seen_parse_files: set[str] = set()      # Hangi dosyalar zaten parse edildi
-_execute_count = 0                        # Kaç execute yapıldı
-_max_execute = _compute_max_execute(...)  # Maks execute hakkı (6 veya 10)
-_total_blocked = 0                        # Toplam engelleme sayısı
-_MAX_BLOCKED = 4                          # 4 engellemeden sonra geçir
-_consecutive_blocks = 0                   # Ardışık engelleme (circuit breaker)
-_MAX_CONSECUTIVE_BLOCKS = 3              # 3 ardışık → sonsuz döngü tespiti
-```
-
-**`reset_interceptor_state()`:**
-
-🔗 [**src/agent/graph.py:152-166** — Reset fonksiyonu](https://github.com/CYBki/code-execution-agent/blob/main/src/agent/graph.py#L152-L166)
-
-Her yeni kullanıcı mesajından önce çağrılmalı. Neden? Closure değişkenleri
-cached ajan'da yaşıyor — önceki mesajdan kalan sayaçlar sıfırlanmadan yeni
-mesajda yanlış davranış olur.
-
-**Interceptor kuralları — tam liste:**
-
-🔗 [**src/agent/graph.py:168-572** — smart_interceptor fonksiyonu](https://github.com/CYBki/code-execution-agent/blob/main/src/agent/graph.py#L168-L572)
-
-| # | Kural | Satırlar | Ne yapıyor? |
-|---|-------|----------|-------------|
-| 1 | **Circuit Breaker** | [178-188](https://github.com/CYBki/code-execution-agent/blob/main/src/agent/graph.py#L178-L188) | 3 ardışık engelleme → "Sonsuz döngüdesin, DUR" |
-| 2 | **Duplicate parse_file** | [190-213](https://github.com/CYBki/code-execution-agent/blob/main/src/agent/graph.py#L190-L213) | Aynı dosyayı tekrar parse etmeye çalışırsa engelle |
-| 3 | **Execute rate limit** | [216-229](https://github.com/CYBki/code-execution-agent/blob/main/src/agent/graph.py#L216-L229) | Limiti aşarsa (6 veya 10) engelle |
-| 4 | **pip install engeli** | [233-249](https://github.com/CYBki/code-execution-agent/blob/main/src/agent/graph.py#L233-L249) | Paket yüklemeye çalışırsa engelle (güvenlik) |
-| 5 | **Hardcoded veri tespiti** | [251-308](https://github.com/CYBki/code-execution-agent/blob/main/src/agent/graph.py#L251-L308) | `m = {'total': 5863}` gibi literal sayılar tespit et |
-| 6 | **Network engeli** | [310-323](https://github.com/CYBki/code-execution-agent/blob/main/src/agent/graph.py#L310-L323) | `requests.get`, `urllib` vb. engelle |
-| 7 | **Shell komutu engeli** | [325-349](https://github.com/CYBki/code-execution-agent/blob/main/src/agent/graph.py#L325-L349) | `ls`, `cat`, `find` vb. engelle |
-| 8 | **Dosya sistemi engeli** | [351-368](https://github.com/CYBki/code-execution-agent/blob/main/src/agent/graph.py#L351-L368) | `os.listdir`, `glob.glob` vb. engelle |
-| 9 | **nrows sampling engeli** | [370-384](https://github.com/CYBki/code-execution-agent/blob/main/src/agent/graph.py#L370-L384) | `nrows > 10` engelle (tam veri oku) |
-| 10 | **Büyük sampling engeli** | [388-408](https://github.com/CYBki/code-execution-agent/blob/main/src/agent/graph.py#L388-L408) | `.head(500)` üstü engelle |
-| 11 | **Font otomatik düzeltme** | [410-469](https://github.com/CYBki/code-execution-agent/blob/main/src/agent/graph.py#L410-L469) | Arial → DejaVu, font yolu düzeltme |
-| 12 | **Hardcoded değişken tespiti** | [471-515](https://github.com/CYBki/code-execution-agent/blob/main/src/agent/graph.py#L471-L515) | `revenue = 17588623` gibi satırları tespit et |
-
-Bir kuralı detaylı inceleyelim — **Hardcoded veri tespiti (Kural 5):**
+#### Kural 5: Hardcoded Veri Tespiti — en karmaşık kural
 
 🔗 [**src/agent/graph.py:251-308** — Hardcoded data detection](https://github.com/CYBki/code-execution-agent/blob/main/src/agent/graph.py#L251-L308)
 
 ```python
-# Her atama AYRI AYRI kontrol et (tek regex değil!)
-_hc_dicts = [m for m in re.finditer(
-    r'\w+\s*=\s*\{[^}]*\b\d{3,}\b[^}]*\}', cmd
-) if _is_hardcoded_assignment(m.group())]
-
-def _is_hardcoded_assignment(match_text):
-    """Bu atamada veri erişim operasyonu var mı?"""
-    return not any(da in match_text for da in _data_access_ops)
+            _data_access_ops = (".tolist()", ".values", "groupby", ".sum()",
+                                ".mean()", ".count()", ".nunique()", "duckdb.sql",
+                                "len(", "int(", "float(", ...)
 ```
 
-Mantık: `m = {'total': df['col'].sum()}` → OK (`.sum()` var, veriden geliyor).
-`m = {'total': 5863}` → ENGELLE (literal sayı, veriden gelmiyor).
+Bu liste "gerçek veri erişim operasyonları". Bunlardan biri kodda varsa → sayılar
+gerçek veriden geliyor. Yoksa → hardcoded.
 
-`_data_access_ops` listesinde `.tolist()`, `.values`, `groupby`, `duckdb.sql`,
-`.sum()`, `.mean()` gibi ~30 operasyon var. Bunlardan biri bile varsa → gerçek veri.
-Yoksa → hardcoded.
-
-**Execute sonrası bilgi ekleme:**
-
-🔗 [**src/agent/graph.py:528-568** — Execute sonrası suffix](https://github.com/CYBki/code-execution-agent/blob/main/src/agent/graph.py#L528-L568)
-
-Her execute sonucunun sonuna ekleniyor:
-
-```
-[Execute 3/6, remaining: 3] 💭 Before next step → THOUGHT: ...
+```python
+            def _is_hardcoded_assignment(match_text):
+                return not any(da in match_text for da in _data_access_ops)
 ```
 
-Son 2 execute hakkında: `⚠️ Last executes — combine analysis+PDF in single script.`
+**Örnek:**
+- `m = {'total': df['ID'].nunique()}` → `.nunique()` var → OK
+- `m = {'total': 5863}` → hiçbir data_access_op yok → ENGELLE
 
-Hata varsa: `🔄 CORRECTION 1/3 — THINK: what failed, why, how to fix.`
+```python
+            # Dict assignments: var = {...1234...}
+            _hc_dicts = [m for m in re.finditer(
+                r'\w+\s*=\s*\{[^}]*\b\d{3,}\b[^}]*\}', cmd
+            ) if _is_hardcoded_assignment(m.group())]
+```
 
-### 9.5 Ajan Önbellekleme
+**Regex açıklaması:**
+- `\w+` → değişken adı
+- `\s*=\s*` → atama
+- `\{[^}]*` → açılış süslü parantez + içerik
+- `\b\d{3,}\b` → 3+ basamaklı sayı (word boundary ile)
+- `[^}]*\}` → kapanış süslü parantez
+
+**Neden `\d{3,}` (3+ basamak)?** Küçük sayılar genellikle sabit:
+`{'top_n': 5}` → UI parametresi, OK. `{'total': 5863}` → muhtemelen hardcoded metrik.
+
+#### Kural 11: Font Otomatik Düzeltme
+
+🔗 [**src/agent/graph.py:410-469** — Font auto-fix](https://github.com/CYBki/code-execution-agent/blob/main/src/agent/graph.py#L410-L469)
+
+```python
+            is_pdf_code = "fpdf" in cmd.lower() or "FPDF" in cmd
+            if is_pdf_code:
+                for bad_font in ("Arial", "Helvetica"):
+                    if bad_font in cmd:
+                        cmd = cmd.replace(f"'{bad_font}'", "'DejaVu'")
+```
+
+**Neden otomatik düzeltme?** Claude "Arial" fontu kullanmayı seviyor — yaygın ve tanıdık.
+Ama sandbox'ta Arial yok (lisans sorunu). DejaVu fontları yüklü. Her seferinde hata
+verip ajanı düzeltmeye zorlamak yerine otomatik değiştiriyoruz — execute kotası harcanmıyor.
+
+```python
+                if "DejaVu" in cmd and "add_font" not in cmd:
+                    font_setup = (
+                        "pdf.add_font('DejaVu', '', '/home/sandbox/DejaVuSans.ttf', uni=True)\n"
+                        "pdf.add_font('DejaVu', 'B', '/home/sandbox/DejaVuSans-Bold.ttf', uni=True)\n"
+                    )
+                    cmd = re.sub(r'(pdf\.add_page\(\))', r'\1\n' + font_setup, cmd, count=1)
+```
+
+**Neden `add_page()` sonrasına enjekte?** FPDF'de font ekleme `add_page()` sonrası
+yapılmalı. Regex ile `add_page()` satırını bulup hemen sonrasına font kurulumunu ekliyoruz.
+`count=1` → sadece ilk eşleşmede (birden fazla `add_page` olabilir).
+
+#### Execute sonrası bilgi ekleme
+
+🔗 [**src/agent/graph.py:528-568** — Post-execute metadata](https://github.com/CYBki/code-execution-agent/blob/main/src/agent/graph.py#L528-L568)
+
+```python
+        if name == "execute" and isinstance(result, ToolMessage):
+            remaining = _max_execute - _execute_count
+
+            has_error = any(kw in content for kw in (
+                "Error", "Traceback", "AssertionError", ...
+            ))
+
+            if has_error:
+                _correction_count += 1
+                if _correction_count < _MAX_CORRECTIONS:
+                    suffix = f"🔄 CORRECTION {_correction_count}/3 — THINK: what failed"
+                else:
+                    suffix = f"⛔ CORRECTION LIMIT. SKIP this, inform user."
+```
+
+**Neden correction loop limiti?** Ajan bazen aynı hatayı 10 kez düzeltmeye çalışır —
+her seferinde execute kotası harcanır. 3 deneme sonrası "bırak, kullanıcıya söyle" diyoruz.
+
+```python
+            if remaining <= 2:
+                suffix += " ⚠️ Last executes — combine analysis+PDF in single script."
+```
+
+**Neden son 2'de uyarı?** Ajan genellikle analiz ve PDF üretimini ayrı execute'larda
+yapıyor. Ama kota azaldığında birleştirmeli — yoksa analiz yapıp PDF üretemez.
+
+### 9.3 Middleware Zinciri
+
+🔗 [**src/agent/graph.py:574-597** — Middleware ve ajan oluşturma](https://github.com/CYBki/code-execution-agent/blob/main/src/agent/graph.py#L574-L597)
+
+```python
+    middleware = [
+        create_summarization_middleware(model, backend),
+        AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore"),
+        PatchToolCallsMiddleware(),
+        smart_interceptor,
+    ]
+```
+
+**Sıralama önemli — aşağıdan yukarıya çalışır:**
+1. İstek gelir → `smart_interceptor` (en altta, ilk çalışan)
+2. → `PatchToolCallsMiddleware` (araç çağrısı format düzeltmeleri)
+3. → `AnthropicPromptCachingMiddleware` (tekrar eden prompt'ları cache'le — maliyet ↓)
+4. → `create_summarization_middleware` (uzun konuşmaları özetle — context window)
+
+```python
+    agent = agent.with_config({"recursion_limit": REACT_MAX_ITERATIONS * 2 + 1})
+```
+
+**Neden `* 2 + 1`?** LangGraph'ta her ReAct adımı = 2 node transition (ajan node + araç node).
+30 iterasyon = 60 transition. `+1` güvenlik marjı.
+
+### 9.4 Ajan Önbellekleme
 
 🔗 [**src/agent/graph.py:600-629** — get_or_build_agent](https://github.com/CYBki/code-execution-agent/blob/main/src/agent/graph.py#L600-L629)
 
 ```python
-def get_or_build_agent(sandbox_manager, thread_id, uploaded_files, user_query):
     file_fingerprint = tuple(
         (f.name, len(f.getvalue())) for f in (uploaded_files or [])
     )
     cached = st.session_state.get("_agent_cache")
     if cached and cached["fingerprint"] == file_fingerprint:
         return cached["agent"], cached["checkpointer"], cached["reset_fn"]
-    # Yoksa yeniden oluştur
-    agent, checkpointer, reset_fn = build_agent(...)
-    st.session_state["_agent_cache"] = {"fingerprint": file_fingerprint, ...}
 ```
 
-Dosya seti aynıysa ajanı yeniden oluşturmaya gerek yok. Fingerprint = (dosya_adı,
-dosya_boyutu) tuple'ı. Yeni dosya yüklenirse veya farklı boyutta dosya gelirse
-ajan yeniden oluşturulur (skill'ler değişmiş olabilir).
+**Neden fingerprint?** Aynı dosyalarla çalışıyorsak ajanı yeniden oluşturmaya gerek yok
+(skill'ler değişmedi, araçlar aynı). `(dosya_adı, dosya_boyutu)` tuple'ı yeterli bir
+fingerprint — dosya içeriğini hash'lemek gereksiz yavaş olur.
+
+**Neden boyut kontrol?** Aynı isimle farklı içerik yüklenebilir. Boyut değiştiyse
+muhtemelen farklı dosya — ajanı yeniden oluştur.
 
 ---
 
 ## Bölüm 10: Kullanıcı Arayüzü
 
-Artık altyapımız hazır. Şimdi kullanıcının gördüğü ekranı oluşturuyoruz.
-
 ### 10.1 Oturum Yönetimi
 
 🔗 [**src/ui/session.py** — Tam dosya (154 satır)](https://github.com/CYBki/code-execution-agent/blob/main/src/ui/session.py)
 
-**`MockUploadedFile` — DB'den geri yükleme:**
+```python
+class MockUploadedFile:
+    def __init__(self, name, size, data):
+        self.name = name
+        self.size = size
+        self._data = data if isinstance(data, bytes) else data.encode()
 
-🔗 [**src/ui/session.py:15-28** — MockUploadedFile sınıfı](https://github.com/CYBki/code-execution-agent/blob/main/src/ui/session.py#L15-L28)
+    def getvalue(self):
+        return self._data
 
-Kullanıcı geçmiş konuşmaya döndüğünde dosyalar DB'den yükleniyor. Ama Streamlit'in
-`UploadedFile` arayüzünü taklit etmemiz lazım — `name`, `size`, `getvalue()`,
-`seek()` metotları olmalı. `MockUploadedFile` tam bunu yapıyor.
+    def seek(self, pos):
+        pass    # ← Gerçek seek yok — tüm veri bellekte
+```
 
-**`init_session()` — Ön-ısıtma:**
+**Neden bu sınıf?** Geçmiş konuşmaya dönerken dosyalar DB'den yükleniyor (BLOB).
+Ama kodun geri kalanı Streamlit'in `UploadedFile` arayüzünü bekliyor: `.name`,
+`.size`, `.getvalue()`, `.seek()`. `MockUploadedFile` bu arayüzü taklit ediyor.
 
-🔗 [**src/ui/session.py:32-113** — init_session fonksiyonu](https://github.com/CYBki/code-execution-agent/blob/main/src/ui/session.py#L32-L113)
+**Neden `seek()` boş?** DB'den yüklenen dosya zaten tamamen bellekte. `BytesIO` gibi
+stream pozisyonu yok. `getvalue()` her zaman tüm veriyi döndürüyor. `seek(0)` çağrıları
+(file_parser.py'deki gibi) sessizce göz ardı ediliyor — zararı yok.
+
+#### Ön-ısıtma mekanizması
+
+🔗 [**src/ui/session.py:86-104** — Pre-warming thread](https://github.com/CYBki/code-execution-agent/blob/main/src/ui/session.py#L86-L104)
 
 ```python
-def init_session():
-    # 1. Session state varsayılanlarını ayarla
-    defaults = {"messages": [], "session_id": str(uuid4()), ...}
-
-    # 2. SandboxManager oluştur
     if "sandbox_manager" not in st.session_state:
         st.session_state["sandbox_manager"] = SandboxManager()
 
-    # 3. Arka plan thread'inde sandbox'u ön-ısıt
     def _pre_warm():
-        sandbox_manager.get_or_create_sandbox(session_id)
-    t = threading.Thread(target=_pre_warm, daemon=True)
+        try:
+            sandbox_manager.get_or_create_sandbox(session_id)
+        except Exception as e:
+            logger.error("Pre-warm failed: %s", e)
+
+    t = threading.Thread(target=_pre_warm, daemon=True, name="sandbox-prewarm")
     t.start()
-
-    # 4. atexit ile temizlik kaydı
-    atexit.register(sandbox_manager.stop)
 ```
 
-> 💡 **Neden ön-ısıtma?** Sandbox oluşturma ~5 saniye sürüyor. Kullanıcı sayfayı
-> açtığında hemen sandbox oluşturmaya başlıyoruz. Kullanıcı dosya yükleyip soru
-> sorduğunda sandbox zaten hazır — bekleme yok.
+**Neden daemon thread?** `daemon=True` → ana program kapanırsa bu thread de kapanır.
+Zombie thread bırakmaz. Ön-ısıtma kritik değil — başarısız olursa kullanıcı soru
+sorduğunda tekrar denenir.
 
-**`reset_session()` — Yeni Konuşma:**
+**Neden arka planda?** Sandbox oluşturma ~5 saniye. Bu 5 saniyeyi kullanıcının
+dosya yüklemesi veya düşünmesi sırasında harcıyoruz. Soru sorduğunda sandbox hazır.
 
-🔗 [**src/ui/session.py:116-154** — reset_session fonksiyonu](https://github.com/CYBki/code-execution-agent/blob/main/src/ui/session.py#L116-L154)
+### 10.2 Chat — Stream İşleme
 
-Tüm session state temizleniyor, ajan cache silinyor, sandbox workspace
-temizleniyor. Ama sandbox container'ı ÖLDÜRÜLMÜYOR — sadece dosyalar ve kernel
-sıfırlanıyor.
-
-### 10.2 CSS Stilleri
-
-🔗 [**src/ui/styles.py** — Tam dosya (413 satır)](https://github.com/CYBki/code-execution-agent/blob/main/src/ui/styles.py)
-
-Claude-benzeri görünüm: koyu kenar çubuğu, araç kartları, dönen spinner animasyonu,
-renk kodlu durum göstergeleri.
-
-**Araç ikonları:**
-
-🔗 [**src/ui/styles.py:377-413** — TOOL_ICONS ve fonksiyonlar](https://github.com/CYBki/code-execution-agent/blob/main/src/ui/styles.py#L377-L413)
+🔗 [**src/ui/chat.py:494-721** — render_chat](https://github.com/CYBki/code-execution-agent/blob/main/src/ui/chat.py#L494-L721)
 
 ```python
-TOOL_ICONS = {
-    "parse_file": "📄",
-    "execute": "🐍",
-    "generate_html": "🌐",
-    "create_visualization": "📊",
-    "download_file": "📥",
-}
+    # Interceptor sayaçlarını sıfırla — KRİTİK!
+    reset_fn()
+
+    # Stream başlat
+    for chunk in agent.stream(
+        {"messages": [{"role": "user", "content": user_query}]},
+        config={"configurable": {"thread_id": session_id}},
+        stream_mode="updates",
+    ):
+        _process_stream_chunk(chunk, rendered_ids, exec_manager)
 ```
 
-### 10.3 Kenar Çubuğu
+**Neden `stream_mode="updates"`?** Alternatifler:
+- `"values"`: Her adımda tüm mesaj geçmişini döner → büyük payload, yavaş
+- `"updates"`: Sadece değişen kısmı döner → küçük payload, hızlı
 
-🔗 [**src/ui/components.py** — Tam dosya (142 satır)](https://github.com/CYBki/code-execution-agent/blob/main/src/ui/components.py)
-
-**Dosya yükleme:**
-
-🔗 [**src/ui/components.py:39-86** — render_sidebar](https://github.com/CYBki/code-execution-agent/blob/main/src/ui/components.py#L39-L86)
+Biz sadece yeni eklenen mesajları görmek istiyoruz. "updates" tam bunu veriyor.
 
 ```python
-uploaded = st.file_uploader(
-    "Upload files",
-    type=["csv", "xlsx", "xls", "xlsm", "json", "pdf", "tsv"],
-    accept_multiple_files=True,
-)
-if uploaded:
-    st.session_state["uploaded_files"] = uploaded
-    save_files(_sid, uploaded)  # DB'ye hemen kaydet
+    # Stream bittikten sonra artifact'ları topla
+    _store = get_store(session_id)
+    collected_html = _store.pop_html()
+    collected_charts = _store.pop_charts()
+    collected_downloads = _store.pop_downloads()
+
+    _render_artifacts(collected_html, collected_charts, collected_downloads)
 ```
 
-**Geçmiş konuşmalar:**
+**Neden stream sonrası?** Stream sırasında render etsek, mesaj sırası bozulabilir.
+Önce tüm stream'i işle (araç çağrıları, execute sonuçları, final yanıt), sonra
+artifact'ları göster. Tutarlı sıralama.
 
-🔗 [**src/ui/components.py:95-137** — Konuşma geçmişi](https://github.com/CYBki/code-execution-agent/blob/main/src/ui/components.py#L95-L137)
+#### Engellenen mesajları gizleme
 
-Kullanıcının `user_id`'sine göre tüm konuşmalar listeleniyor. Tıklandığında
-mesajlar DB'den yükleniyor, dosyalar `MockUploadedFile` olarak geri oluşturuluyor.
+🔗 [**src/ui/chat.py:476-481** — Block filtering](https://github.com/CYBki/code-execution-agent/blob/main/src/ui/chat.py#L476-L481)
 
-### 10.4 Sohbet Arayüzü — En Karmaşık UI Parçası
+```python
+                _blocked_markers = ("⛔", "BLOCKED", "already parsed", ...)
+                if any(m in tool_content for m in _blocked_markers):
+                    logger.debug("Interceptor block (hidden from UI): %s", ...)
+                    continue    # ← Kullanıcıya GÖSTERME
+```
 
-🔗 [**src/ui/chat.py** — Tam dosya (721 satır)](https://github.com/CYBki/code-execution-agent/blob/main/src/ui/chat.py)
+**Neden gizliyoruz?** Kullanıcı "⛔ Shell command 'ls' BLOCKED" görmek istemez. Bu
+internal mekanizma — ajan kuralları öğrenme sürecinde. Kullanıcı temiz bir arayüz
+görüyor, ajan ise engelleme mesajını alıp davranışını düzeltiyor.
 
-**Adım ismi tespiti — akıllı etiketleme:**
+#### ExecuteStatusManager — Canlı Durum
+
+🔗 [**src/ui/chat.py:97-240** — ExecuteStatusManager](https://github.com/CYBki/code-execution-agent/blob/main/src/ui/chat.py#L97-L240)
+
+```python
+class ExecuteStatusManager:
+    def __init__(self):
+        self._placeholder = None          # st.empty() — canlı güncelleme
+        self._step_count = 0
+        self._steps_buffer = []           # Tüm adımları tut (yeniden render için)
+        self._start_time = None
+```
+
+**Neden `st.empty()`?** Streamlit'te bir kez render ettiğin element değiştirilemez...
+`st.empty()` hariç. `empty()` bir placeholder oluşturur — her `_render_current_state()`
+çağrısında içeriğini tamamen değiştiriyoruz. Böylece "Step 1/3 çalışıyor..." →
+"Step 2/3 çalışıyor..." → "✅ Complete (3 steps)" animasyonu sağlıyoruz.
+
+**Neden `_steps_buffer`?** Her güncelleme tüm UI'ı yeniden çiziyor (Streamlit'in
+modeli böyle). Buffer'da tüm adımları tutuyoruz ki her render'da geçmiş adımlar da
+gösterilsin.
+
+```python
+    def add_execute_call(self, tool_call_id, code):
+        step_name = _detect_step_name(code)       # ← Koddan adım ismi tahmin et
+        self._current_step_name = step_name
+        self._steps_buffer.append({
+            'num': self._step_count,
+            'code': code,
+            'step_name': step_name,
+            'start_time': time.time(),             # ← Süre ölçümü başlat
+        })
+        self._render_current_state("running")
+```
+
+#### Adım ismi tespiti — öncelik sistemi
 
 🔗 [**src/ui/chat.py:23-94** — _detect_step_name](https://github.com/CYBki/code-execution-agent/blob/main/src/ui/chat.py#L23-L94)
 
-Her execute çağrısının koduna bakıp ne yaptığını tahmin ediyor:
-
 ```python
-_DETECTORS = [
-    (100, "📑 Generating PDF Report",    'weasyprint' in code_lower),
-    (95,  "🎞️ Creating Presentation",   'pptx' in code_lower),
-    (85,  "🦆 Running Database Query",   'duckdb' in code_lower),
-    (70,  "📄 Loading & Cleaning Data",  'read_excel' in code and 'dropna' in code),
-    (60,  "📊 Analyzing Data",           'groupby' in code_lower),
-    ...
-]
+    _DETECTORS = [
+        (100, "📑 Generating PDF Report",    'weasyprint' in code_lower),
+        (95,  "🎞️ Creating Presentation",   'pptx' in code_lower),
+        (85,  "🦆 Running Database Query",   'duckdb' in code_lower),
+        (70,  "📄 Loading & Cleaning Data",  'read_excel' in code and 'dropna' in code),
+        (65,  "📄 Loading Data",             'read_excel' in code_lower),
+        (60,  "📊 Analyzing Data",           'groupby' in code_lower),
+        ...
+    ]
+
+    for priority, label, matched in _DETECTORS:
+        if matched and priority > best_priority:
+            best_priority = priority
+            best_label = label
 ```
 
-Öncelik sistemi: Aynı kod bloğunda hem `read_excel` hem `weasyprint` varsa,
-`weasyprint` daha yüksek önceliğe sahip → "📑 Generating PDF Report" gösterilir.
-
-**`ExecuteStatusManager` — Canlı Durum Gösterimi:**
-
-🔗 [**src/ui/chat.py:97-240** — ExecuteStatusManager sınıfı](https://github.com/CYBki/code-execution-agent/blob/main/src/ui/chat.py#L97-L240)
-
-Bu sınıf birden fazla execute çağrısını tek bir konsolide container'da gösteriyor:
-
-```
-⟳ 📊 Analyzing Data (Step 3/~5)
-  ├─ Step 1 · 📄 Loading Data ✅ (1.2s)
-  ├─ Step 2 · 🧹 Cleaning Data ✅ (0.8s)
-  └─ Step 3 · 📊 Analyzing Data ⟳ (çalışıyor...)
-```
-
-Dönen spinner animasyonu, adım sayacı, süre takibi — hepsi burada.
-
-**`render_chat()` — Ana Akış:**
-
-🔗 [**src/ui/chat.py:494-721** — render_chat fonksiyonu](https://github.com/CYBki/code-execution-agent/blob/main/src/ui/chat.py#L494-L721)
-
-Bu fonksiyon her şeyi birleştiriyor. Adım adım:
-
-1. **Mesaj geçmişini göster** (satır 497-538)
-2. **Kullanıcı girdisi al** (satır 541-558)
-3. **Ajanı al veya oluştur** (satır 573-580)
-4. **Sandbox hazır olana kadar bekle** (satır 582-591)
-5. **Dosyaları sandbox'a yükle** (satır 593-606)
-6. **Interceptor sayaçlarını sıfırla** (satır 608-610)
-7. **Ajan stream'ini başlat** (satır 612-665)
-8. **Artifact'ları render et** (satır 682-689)
-9. **Mesajı kaydet** (satır 691-707)
-10. **Otomatik öğrenme başlat** (satır 709-721)
-
-**Önemli satır — interceptor reset:**
-
-🔗 [**src/ui/chat.py:608-610** — reset_fn() çağrısı](https://github.com/CYBki/code-execution-agent/blob/main/src/ui/chat.py#L608-L610)
-
-```python
-reset_fn()  # ← BU ÇAĞRI KRİTİK
-```
-
-Bu çağrı olmazsa önceki mesajdaki execute sayacı sıfırlanmaz. İlk mesajda 5 execute
-yapıldıysa, ikinci mesajda sadece 1 hakkın kalır — yanlış davranış.
-
-**Stream chunk işleme:**
-
-🔗 [**src/ui/chat.py:410-491** — _process_stream_chunk](https://github.com/CYBki/code-execution-agent/blob/main/src/ui/chat.py#L410-L491)
-
-LangGraph `stream_mode="updates"` ile chunk chunk veri gönderiyor. Her chunk:
-- **AI message + tool_calls** → execute ise `exec_manager`'a yönlendir, değilse
-  doğrudan render et
-- **AI message + content** → final yanıt, markdown olarak göster
-- **Tool message** → engellenmişse gizle, execute sonucuysa manager'a ver
-
-**Engellenen mesajları gizleme:**
-
-🔗 [**src/ui/chat.py:476-481** — Blocked message filtering](https://github.com/CYBki/code-execution-agent/blob/main/src/ui/chat.py#L476-L481)
-
-```python
-_blocked_markers = ("⛔", "BLOCKED", "already parsed", ...)
-if any(m in tool_content for m in _blocked_markers):
-    continue  # Kullanıcıya gösterme — sadece ajan görüyor
-```
-
-Smart interceptor'ın engel mesajları kullanıcıyı ilgilendirmiyor. Ajan bu mesajları
-görüp davranışını düzeltiyor, ama kullanıcı temiz bir arayüz görüyor.
-
-**Otomatik öğrenme (auto_learn):**
-
-🔗 [**src/ui/chat.py:709-721** — Auto learn thread](https://github.com/CYBki/code-execution-agent/blob/main/src/ui/chat.py#L709-L721)
-
-```python
-threading.Thread(
-    target=auto_learn,
-    kwargs={"user_query": user_query, "agent_final_response": full_response, ...},
-    daemon=True,
-).start()
-```
-
-Her konuşma bittiğinde arka planda analiz yapılıyor: Ajan iyi mi yaptı? Skill
-kuralları güncellenmeli mi? Bu daemon thread olarak çalışıyor — UI'ı bloklamıyor.
+**Neden öncelik sistemi?** Aynı kod bloğunda `read_excel` + `weasyprint` olabilir
+(veri oku + PDF üret). İkisi de eşleşir ama PDF üretimi daha "önemli" — kullanıcıya
+"📑 Generating PDF Report" gösterilmeli. Öncelik sistemi en spesifik operasyonu seçiyor.
 
 ---
 
-## Bölüm 11: Giriş Noktası — `app.py`
+## Bölüm 11: Giriş Noktası
 
 🔗 [**app.py** — Tam dosya (58 satır)](https://github.com/CYBki/code-execution-agent/blob/main/app.py)
 
-Şimdi her şeyi birleştiriyoruz. Bu dosya sadece 58 satır ama her satır bir katmanı
-başlatıyor:
+```python
+from src.utils.logging_config import setup_logging
+setup_logging()                              # 1. İLK: Log sistemi
+```
+
+**Neden ilk?** Bundan sonraki her şey loglanabilir. Hata olursa yakalarız.
 
 ```python
-# 1. Logging başlat
-setup_logging()
+from dotenv import load_dotenv
+load_dotenv()                                # 2. .env dosyasını yükle
+```
 
-# 2. .env dosyasını yükle (lokal geliştirme için)
-load_dotenv()
+**Neden logging'den sonra?** `load_dotenv()` başarısız olursa log'a yazmak istiyoruz.
 
-# 3. Streamlit sayfa ayarları
+```python
 st.set_page_config(page_title="Data Analysis Agent", layout="wide")
+```
 
-# 4. CSS stillerini uygula
+**Neden `layout="wide"`?** Dashboard'lar ve grafikler geniş alan istiyor. Dar layout'ta
+kesilir.
+
+```python
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+```
 
-# 5. API anahtarlarını doğrula
+**Neden `unsafe_allow_html`?** Streamlit güvenlik nedeniyle HTML/CSS'i engelliyor.
+Biz özel stiller (koyu kenar çubuğu, dönen spinner, renk kodlu durumlar) istiyoruz —
+kendi CSS'imizi enjekte ediyoruz.
+
+```python
 try:
     get_secret("ANTHROPIC_API_KEY")
     get_secret("OPEN_SANDBOX_API_KEY")
 except ValueError as e:
     st.error(str(e))
-    st.stop()
-
-# 6. Veritabanını başlat (tabloları oluştur)
-init_db()
-
-# 7. Oturumu başlat (sandbox ön-ısıtma dahil)
-init_session()
-
-# 8. UI render
-render_sidebar()
-render_chat()
+    st.stop()                                # ← Anahtar yoksa DURMA
 ```
 
-> 💡 **Sıralama önemli!** `setup_logging()` en başta — hata olursa log'a düşsün.
-> `load_dotenv()` API anahtarlarından önce — `.env` yüklensin ki anahtarlar bulunabilsin.
-> `init_session()` → `render_chat()`'ten önce — sandbox hazırlanmaya başlasın.
+**Neden `st.stop()`?** API anahtarı olmadan hiçbir şey çalışmaz. Ajanı oluşturamayız,
+sandbox'a bağlanamayız. Kullanıcıya hata gösterip durmak en dürüst yaklaşım.
+
+```python
+init_db()                                    # 5. Tabloları oluştur
+init_session()                               # 6. Oturum + sandbox ön-ısıtma
+render_sidebar()                             # 7. Sol panel
+render_chat()                                # 8. Sohbet alanı
+```
+
+**Sıralama neden önemli?** `init_db()` → `init_session()` çünkü session DB'ye
+konuşma kaydediyor. `init_session()` → `render_chat()` çünkü chat sandbox'un
+hazır olmasını bekliyor. `render_sidebar()` → `render_chat()` çünkü dosya yükleme
+sidebar'da yapılıyor, chat dosyaları okuyor.
 
 ---
 
 ## Bölüm 12: Uçtan Uca Akış
 
-Tüm parçalar yerli yerinde. Şimdi bir senaryoyu baştan sona takip edelim:
+Tüm bileşenleri birleştirip tek bir senaryoyu takip edelim:
 
-**Senaryo:** Kullanıcı `sales.xlsx` dosyasını yüklüyor ve "Bu veriyi analiz et, PDF rapor ver" diyor.
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ 1. SAYFA AÇILIYOR                                                          │
-│                                                                             │
-│  app.py:                                                                    │
-│    setup_logging()     → JSON log sistemi hazır                            │
-│    load_dotenv()       → .env'den API anahtarları                          │
-│    get_secret(...)     → ANTHROPIC_API_KEY + OPEN_SANDBOX_API_KEY doğrula  │
-│    init_db()           → SQLite tabloları oluştur                          │
-│    init_session()      → session_id üret, sandbox oluşturmaya BAŞLA       │
-│                          (daemon thread ile — arka planda ~5 saniye)        │
-│    render_sidebar()    → Dosya yükleme widget'ı göster                    │
-│    render_chat()       → Boş sohbet ekranı                                │
-│                                                                             │
-├─────────────────────────────────────────────────────────────────────────────┤
-│ 2. DOSYA YÜKLENİYOR (kullanıcı sales.xlsx'i sürükle-bırak yapıyor)       │
-│                                                                             │
-│  components.py → render_sidebar():                                         │
-│    st.file_uploader(...) → uploaded dosyayı yakala                         │
-│    st.session_state["uploaded_files"] = [sales.xlsx]                       │
-│    save_files(session_id, uploaded) → BLOB olarak DB'ye kaydet            │
-│                                                                             │
-├─────────────────────────────────────────────────────────────────────────────┤
-│ 3. SORU SORULUYOR ("Bu veriyi analiz et, PDF rapor ver")                  │
-│                                                                             │
-│  chat.py → render_chat():                                                  │
-│    a) user_query = st.chat_input(...)                                      │
-│    b) save_message(session_id, "user", user_query)                         │
-│    c) get_or_build_agent() →                                               │
-│       - detect_required_skills([sales.xlsx]) → ["xlsx"]                    │
-│       - compose_system_prompt(BASE + xlsx skill)                           │
-│       - make_parse_file_tool, make_execute_tool, ...                       │
-│       - smart_interceptor oluştur                                          │
-│    d) sandbox_manager.wait_until_ready() → sandbox ön-ısıtma tamamlandı   │
-│    e) sandbox_manager.upload_files([sales.xlsx]) → /home/sandbox/sales.xlsx│
-│    f) reset_fn() → interceptor sayaçlarını sıfırla                        │
-│                                                                             │
-├─────────────────────────────────────────────────────────────────────────────┤
-│ 4. AJAN ÇALIŞIYOR (ReAct döngüsü)                                        │
-│                                                                             │
-│  Turn 1: parse_file("sales.xlsx")                                          │
-│    → file_parser.py: Excel şemasını çıkar (lokal, sandbox'a gitmez)       │
-│    → Sonuç: "4 kolon, 50,000 satır, tarih formatı: DD.MM.YYYY"           │
-│    → interceptor: _seen_parse_files.add("sales.xlsx")                     │
-│                                                                             │
-│  Turn 2: execute("df = pd.read_excel(...); df.dropna(...)")                │
-│    → interceptor: _execute_count=1, limit=6 → GEÇIR                       │
-│    → execute.py: Python kodu tespit → base64 → kernel'da çalıştır         │
-│    → manager.py: codes.run(py_code, context=py_context)                    │
-│    → Sonuç: "✅ 48,500 satır yüklendi" + "[Execute 1/6, remaining: 5]"   │
-│                                                                             │
-│  Turn 3: execute("m = {'total': len(df), 'avg': df['Revenue'].mean()}")   │
-│    → interceptor: Hardcoded check → .mean() var → OK, GEÇIR              │
-│    → Sonuç: "✅ m dict computed: 5 keys: ['total', 'avg', ...]"           │
-│                                                                             │
-│  Turn 4: execute("html = f'...{m[\"total\"]:,}...'; weasyprint → PDF")    │
-│    → interceptor: _execute_count=3, limit=6 → GEÇIR                       │
-│    → PDF oluşturuldu: /home/sandbox/rapor.pdf (148 KB)                    │
-│                                                                             │
-│  Turn 5: download_file("/home/sandbox/rapor.pdf")                          │
-│    → download_file.py: Sandbox'tan indir → _clean_excel_dates (PDF, skip) │
-│    → ArtifactStore.add_download(pdf_bytes, "rapor.pdf")                   │
-│                                                                             │
-│  Final: Ajan yanıtı: "Analiz tamamlandı, PDF rapor hazır."               │
-│    (Sayı yok — kural gereği)                                               │
-│                                                                             │
-├─────────────────────────────────────────────────────────────────────────────┤
-│ 5. SONUÇ RENDER EDİLİYOR                                                  │
-│                                                                             │
-│  chat.py:                                                                  │
-│    exec_manager.finalize() → "✅ Code Execution Complete (3 steps, 8.2s)" │
-│    store.pop_downloads() → [{bytes: ..., filename: "rapor.pdf"}]          │
-│    st.download_button("📥 rapor.pdf indir", data=pdf_bytes)               │
-│    save_message(session_id, "assistant", response, steps=[...])           │
-│    auto_learn() → arka plan thread'i ile kalite analizi                    │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Engelleme Senaryosu
-
-Ya ajan `ls` komutu çalıştırmaya çalışırsa?
+**Senaryo:** Kullanıcı `sales.xlsx` yüklüyor, "Analiz et, PDF ver" diyor.
 
 ```
-  Ajan: execute("ls /home/sandbox/")
-    → interceptor: bare_cmd = "ls" → shell_cmds'de var → ENGELLE
-    → ToolMessage: "⛔ Shell command 'ls' BLOCKED. Known files: /home/sandbox/sales.xlsx"
-    → _consecutive_blocks += 1
-    → UI'da gösterilmez (blocked marker tespiti)
-
-  Ajan (öğreniyor): execute("df = pd.read_excel('/home/sandbox/sales.xlsx')")
-    → interceptor: Python kodu → GEÇIR
-    → _consecutive_blocks = 0  (başarılı execute → sıfırla)
+┌──────────────────────────────────────────────────────────────────────┐
+│ 1. app.py çalışır                                                    │
+│    setup_logging() → JSON log sistemi kuruldu                        │
+│    load_dotenv() → .env'den ANTHROPIC_API_KEY okundu                 │
+│    get_secret() → API anahtarları doğrulandı                         │
+│    init_db() → SQLite tabloları oluşturuldu (yoksa)                  │
+│    init_session() → session_id=uuid üretildi                         │
+│      └─ daemon thread: SandboxManager._create_new_sandbox()          │
+│           └─ SandboxSync.create("agentic-sandbox:v1") → ~5s          │
+│           └─ CodeInterpreter + py_context oluşturuldu                │
+│           └─ publish_html() kernel'a enjekte edildi                   │
+│           └─ _packages_ready.set() → hazır sinyali                   │
+│    render_sidebar() → dosya yükleme widget'ı gösterildi              │
+│    render_chat() → boş sohbet ekranı                                 │
+│                                                                      │
+│ 2. Kullanıcı sales.xlsx yüklüyor                                     │
+│    st.file_uploader → uploaded_files = [sales.xlsx]                   │
+│    save_files() → BLOB olarak SQLite'a kaydedildi                    │
+│                                                                      │
+│ 3. Kullanıcı "Analiz et, PDF ver" yazıyor                           │
+│    render_chat():                                                    │
+│      a) save_message(session_id, "user", "Analiz et, PDF ver")       │
+│      b) get_or_build_agent():                                        │
+│         - detect_required_skills([sales.xlsx]) → ["xlsx"]            │
+│         - load_skill("xlsx") → SKILL.md kuralları                    │
+│         - compose_system_prompt(BASE + xlsx skill) → ~1000 satır     │
+│         - make_parse_file_tool(files) → closure'da dosyalar          │
+│         - make_execute_tool(backend) → closure'da backend            │
+│         - ... 5 araç oluşturuldu                                     │
+│         - smart_interceptor oluşturuldu (6 execute hakkı)            │
+│         - create_agent(model, tools, prompt, middleware)              │
+│      c) sandbox_manager.wait_until_ready() → ön-ısıtma bitmişti ✓   │
+│      d) sandbox_manager.upload_files([sales.xlsx])                   │
+│         → /home/sandbox/sales.xlsx (sandbox'ta)                      │
+│      e) reset_fn() → interceptor sayaçları sıfırlandı               │
+│                                                                      │
+│ 4. Ajan çalışıyor (ReAct döngüsü)                                   │
+│                                                                      │
+│    Adım 1: parse_file("sales.xlsx")                                  │
+│      → interceptor: _seen_parse_files.add("sales.xlsx")              │
+│      → file_parser.py: pd.read_excel(BytesIO(file_bytes))           │
+│        → Kolon tipleri, tarih formatları, satır sayısı çıkarıldı     │
+│      → Çıktı: "4 kolon, 50000 satır, InvoiceDate: DD.MM.YYYY"       │
+│      → Çıktı sonu: "✅ PARSE BAŞARILI. Sonraki: execute(read_excel)" │
+│                                                                      │
+│    Adım 2: execute("df = pd.read_excel(...); df.dropna(...)")        │
+│      → interceptor:                                                  │
+│        ✓ Circuit breaker: _consecutive_blocks=0 < 3                  │
+│        ✓ Duplicate parse: "execute" değil                            │
+│        ✓ Rate limit: _execute_count=1 ≤ 6                            │
+│        ✓ Pip install: yok                                            │
+│        ✓ Hardcoded data: pd.read_excel var → data_access_op          │
+│        ✓ Network: yok                                                │
+│        ✓ Shell cmd: "import" ile başlıyor → Python                   │
+│        → GEÇIR                                                       │
+│      → execute.py:                                                   │
+│        1. _extract_python_code() → None (python3 -c yok)            │
+│        2. "import" ile başlıyor → py_code = command                  │
+│        3. base64 encode → printf/base64 -d kalıbı oluştur           │
+│      → manager.py:                                                   │
+│        1. _PYFILE_RE eşleşti → base64 decode                        │
+│        2. codes.run(py_code, context=py_context)                     │
+│        3. df bellekte, 48500 satır                                   │
+│      → Çıktı: "✅ 48500 satır" + "[Execute 1/6, remaining: 5]"      │
+│      → interceptor: _consecutive_blocks = 0 (başarılı)              │
+│                                                                      │
+│    Adım 3: execute("m = {'total': len(df), ...}")                    │
+│      → interceptor: hardcoded check                                  │
+│        "len(df)" var → data_access_op → GEÇIR                       │
+│      → Kernel'da m dict hesaplandı                                   │
+│      → Çıktı: "✅ m: 5 keys: ['total', 'avg', ...]"                 │
+│      → "[Execute 2/6, remaining: 4]"                                 │
+│                                                                      │
+│    Adım 4: execute("html = f'...{m[\"total\"]:,}...'; weasyprint")   │
+│      → interceptor: weasyprint var, sayılar f-string'de → GEÇIR     │
+│      → PDF üretildi: /home/sandbox/rapor.pdf (148 KB)                │
+│      → "[Execute 3/6, remaining: 3]"                                 │
+│                                                                      │
+│    Adım 5: download_file("/home/sandbox/rapor.pdf")                  │
+│      → Path kontrolü: /home/sandbox/ ✓                               │
+│      → backend.download_files() → PDF bytes                         │
+│      → _clean_excel_dates: PDF, skip                                 │
+│      → ArtifactStore.add_download(pdf_bytes, "rapor.pdf")            │
+│      → "✅ rapor.pdf ready (148 KB)"                                 │
+│                                                                      │
+│    Final: Ajan yanıtı: "Analiz tamamlandı, PDF rapor hazır."        │
+│                                                                      │
+│ 5. UI sonuçları gösteriyor                                           │
+│    exec_manager.finalize() → "✅ Complete (3 steps, 8.2s)"           │
+│    store.pop_downloads() → [{rapor.pdf}]                             │
+│    st.download_button("📥 rapor.pdf indir")                          │
+│    save_message(session_id, "assistant", ..., steps=[...])           │
+│    auto_learn() → daemon thread: kalite analizi                      │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
-### Hardcoded Veri Senaryosu
+### Engelleme Senaryosu — Detaylı
 
-Ya ajan önceki çıktıdan sayıları kopyalarsa?
+Ya ajan `ls` çalıştırmaya çalışırsa?
 
 ```
-  Ajan: execute("m = {'total_customers': 5863, 'total_revenue': 17588623}")
-    → interceptor: regex buldu → _is_hardcoded_assignment()
-    → .sum(), .mean(), .tolist() YOK → HARDCODED!
-    → ToolMessage: "⚠️ HARDCODED DATA DETECTED. Use kernel variables directly."
-    → _execute_count -= 1  (hakkını geri ver — haksız ceza olmasın)
+Ajan: execute("ls /home/sandbox/")
+  → interceptor:
+    1. bare_cmd = "ls" (ilk kelime)
+    2. "ls" in shell_cmds → EVET
+    3. _execute_count -= 1 (hakkı geri ver — haksız ceza olmasın)
+    4. _consecutive_blocks += 1 (şu an 1)
+    5. ToolMessage döndür:
+       "⛔ Shell command 'ls' BLOCKED
+        Known files: /home/sandbox/sales.xlsx
+        Use pd.read_excel() instead."
+  → UI: Bu mesaj GÖSTERİLMEZ (_blocked_markers tespiti)
+  → Ajan bu mesajı GÖRÜR ve davranışını düzeltir
 
-  Ajan (düzeltiyor): execute("m = {'total': df['ID'].nunique(), 'rev': df['Rev'].sum()}")
-    → interceptor: .nunique() ve .sum() var → OK, GEÇIR
+Ajan (düzeltme): execute("df = pd.read_excel('/home/sandbox/sales.xlsx')")
+  → interceptor: Python kodu, data_access_op var → GEÇIR
+  → _consecutive_blocks = 0 (sıfırla — başarılı execute)
+  → Kod çalışır, df bellekte
 ```
 
 ---
 
 ## Son Söz
 
-Bu dokümanı okuduysan, projenin her satırını anlamış olmalısın. Sıralama kasıtlıydı:
+Bu dokümanı okuduysan artık her satırın ne yaptığını VE neden o şekilde yazıldığını
+biliyorsun. Önemli tasarım kararları:
 
-1. **Temel altyapı** (config, logging, DB) — bağımsız, basit
-2. **Sandbox** — projenin kalbi, kalıcı kernel
-3. **Araçlar** — ajanın elleri, factory pattern
-4. **Skill sistemi** — dinamik prompt, progressive disclosure
-5. **Sistem prompt'u** — ajanın beyni, kurallar
-6. **Smart interceptor** — güvenlik kalkanı, 12 kural
-7. **UI** — kullanıcının gördüğü ekran, streaming
-8. **app.py** — her şeyi birleştiren 58 satır
+1. **Kalıcı kernel** — pickle yerine CodeInterpreter bağlamı → basitlik + performans
+2. **Factory + closure** — LangChain araç arayüzüyle backend referansı birleştirme
+3. **Artifact store** — thread güvenli köprü: Lock + pop/push pattern
+4. **Progressive disclosure** — ihtiyaca göre prompt derleme → token tasarrufu
+5. **Smart interceptor** — 12 kural, 3 katmanlı hardcoded veri savunması
+6. **Base64 kodlama** — shell escaping sorunlarını ortadan kaldırma
+7. **Ön-ısıtma** — kullanıcı beklemeden sandbox hazırlığı
+8. **Çift backend** — SQLite (dev) + PostgreSQL (prod) aynı kodla
+9. **publish_html marker** — kernel → dosya → marker → artifact store → iframe
+10. **Circuit breaker** — sonsuz döngü tespiti ve durdurma
 
-Her bölümde 🔗 linklerine tıklayıp GitHub'da gerçek kodu gördün. Açıklamayı okudun,
-kodu gördün, sonraki açıklamaya geçtin — projeyi adım adım "yazdın."
-
-Projeye katkı sağlamak istersen, bu akışı takip et:
-1. **Yeni araç mı?** → `src/tools/` altına factory fonksiyon yaz, `graph.py`'de tools listesine ekle
-2. **Yeni skill mi?** → `skills/` altına SKILL.md yaz, `registry.py`'de trigger ekle
-3. **Yeni interceptor kuralı mı?** → `graph.py`'deki `smart_interceptor`'a yeni blok ekle
-4. **UI değişikliği mi?** → `chat.py` veya `components.py`'de düzenle
+Her karar bir problemi çözüyor. Alternatifler denenip elenmiş. Bu doküman o sürecin
+kaydı.
 
 İyi kodlamalar! 🚀
