@@ -129,9 +129,13 @@ def init_db():
                     created_at TIMESTAMPTZ DEFAULT NOW()
                 )
             """)
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id)")
+            # Replace single-column indexes with composite (session_id, id)
+            # so that ORDER BY id is satisfied by the index scan itself.
+            cur.execute("DROP INDEX IF EXISTS idx_messages_session")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_messages_session_ordered ON messages(session_id, id)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations(user_id, updated_at DESC)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_files_session ON files(session_id)")
+            cur.execute("DROP INDEX IF EXISTS idx_files_session")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_files_session_ordered ON files(session_id, id)")
         else:
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS conversations (
@@ -159,9 +163,11 @@ def init_db():
                     created_at TEXT DEFAULT (datetime('now')),
                     FOREIGN KEY (session_id) REFERENCES conversations(session_id)
                 );
-                CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
+                DROP INDEX IF EXISTS idx_messages_session;
+                CREATE INDEX IF NOT EXISTS idx_messages_session_ordered ON messages(session_id, id);
                 CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations(user_id, updated_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_files_session ON files(session_id);
+                DROP INDEX IF EXISTS idx_files_session;
+                CREATE INDEX IF NOT EXISTS idx_files_session_ordered ON files(session_id, id);
             """)
 
         conn.commit()
